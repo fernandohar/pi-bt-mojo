@@ -2,44 +2,45 @@
 
 ## Cursor Cloud specific instructions
 
-This repo is firmware for a **Raspberry Pi Pico 2W** (RP2350) — a wireless
-iPhone→Chord Mojo audio bridge. It cross-compiles to a `.uf2`; it does **not**
-run on the VM. There is one buildable component (the `mojo_bt_bridge` firmware).
+This repo is **ESP-IDF firmware for an ESP32-WROOM** — a wireless iPhone→Chord
+Mojo audio bridge (A2DP AAC in, software S/PDIF out). It cross-compiles to a
+`.bin`; it does **not** run on the VM. There is one buildable app (`mojo_bt_bridge`).
 
 ### Environment (handled by the update script)
-- ARM toolchain: `gcc-arm-none-eabi` + newlib.
-- Host tools for `picotool`/`pioasm`: `build-essential`/`g++` + `libusb-1.0-0-dev`.
-  Gotcha: `/usr/bin/c++` is **gcc-14**, so the matching `libstdc++-14-dev` must be
-  installed or the SDK's `picotool`/`pioasm` sub-builds fail with
-  `cannot find -lstdc++` (even though `g++`→gcc-13 links fine standalone).
-- Pico SDK + pico-extras are cloned to `~/pico/pico-sdk` and `~/pico/pico-extras`
-  (SDK ≥ 2.0 required for RP2350). The top-level `CMakeLists.txt` auto-detects
-  these paths, so **no `PICO_SDK_PATH` env var is needed**.
+- **ESP-IDF v5.5.1** is cloned to `~/esp/esp-idf` and its esp32 toolchain is
+  installed via `install.sh esp32`.
+- `~/.bashrc` auto-sources `~/esp/esp-idf/export.sh`, so new interactive shells
+  have `idf.py`. In a non-interactive shell, run `. ~/esp/esp-idf/export.sh` first.
+- The **`espressif/esp_audio_codec`** managed component (AAC + SBC decoders) is
+  fetched by the IDF component manager on the first `idf.py reconfigure`/`build`
+  (needs internet the first time; cached afterwards in `managed_components/`).
 
-### Build / lint / test
-- Build (S/PDIF, default): `cmake -B build -S . -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4`
-  → `build/firmware/mojo_bt_bridge.uf2`.
-- I2S bring-up variant: add `-DAUDIO_OUTPUT=i2s` (use a separate build dir).
-- There is no separate lint/test suite; the compiler (with warnings) is the
-  gate. Treat a clean `cmake --build` for both `AUDIO_OUTPUT=spdif` and `=i2s`
-  as the "build passes" check.
-- First `cmake --build` after a fresh checkout is slow: it builds `picotool`
-  from source (needs network + host g++/libusb). Subsequent builds are fast.
+### Build / "test"
+- `idf.py set-target esp32` (once), then `idf.py build` → `build/mojo_bt_bridge.bin`.
+- There is no automated test suite; a **clean `idf.py build` is the gate**.
+- `sdkconfig` is generated from `sdkconfig.defaults` and is gitignored; if you
+  change `sdkconfig.defaults`, run `rm sdkconfig && idf.py set-target esp32`.
 
 ### Non-obvious gotchas
-- Do **not** name a local header `a2dp_sink.h` with guard `A2DP_SINK_H` — it
-  collides with BTstack's `classic/a2dp_sink.h`. Our header uses guard
-  `BRIDGE_A2DP_SINK_H`. Likewise avoid the type names `avrcp_connection_t` /
-  other BTstack public typedefs for local structs.
-- RP2350 + `pico_audio` requires explicit `SPINLOCK_ID_AUDIO_FREE_LIST_LOCK` and
-  `SPINLOCK_ID_AUDIO_PREPARED_LISTS_LOCK` defines (set in `firmware/CMakeLists.txt`)
-  or the build hits an `#error` in `pico/audio.h`.
-- BT here is **classic only** (A2DP/AVRCP). We link `pico_btstack_classic` +
-  `pico_btstack_cyw43` and set `CYW43_ENABLE_BLUETOOTH=1`, `CYW43_LWIP=0` (no
-  networking → no `lwipopts.h` needed).
+- **Do NOT background long commands with `&` in the persistent Shell** — a
+  lingering child holds the tool's output pipe open and **jams the shell** for the
+  rest of the session (symptom: every command returns "no exit status"). Recover
+  by passing a `working_directory` to spawn a fresh shell. Use a **foreground
+  call with a long timeout**, or tmux, for the ESP-IDF install/build.
+- ESP-IDF's `install.sh` needs **`python3-venv`** (`ensurepip`); without it the
+  Python env creation fails. The update script installs it.
+- Bluetooth is **classic BR/EDR only** (`CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`,
+  `CONFIG_BT_BLE_ENABLED=n`) with the **external-codec A2DP sink**
+  (`CONFIG_BT_A2DP_USE_EXTERNAL_CODEC=y`). We register an AAC (`M24`) endpoint
+  (primary, iPhone) + SBC (fallback) and decode frames ourselves via
+  `esp_audio_codec`. v5.5.1 has no `BT_A2DP_CODEC_AAC_ENABLED` (master-only); the
+  external-codec path is codec-agnostic, so we supply the AAC capability + decoder.
 
-### Hardware-in-the-loop (cannot be done on the VM)
-Pairing a real iPhone and confirming Mojo lock/audio needs physical hardware
-(a Pico 2W, the S/PDIF wiring in `docs/wiring.md`, and a Mojo). The VM can only
-verify that the firmware compiles to a valid RP2350 image. See `README.md`
-"Use / verify" for the on-device procedure.
+### Needs real hardware (cannot be verified on the VM)
+- Pairing a real iPhone + confirming Mojo lock/audio.
+- **S/PDIF bit/word ordering**: the software encoder in `main/spdif_out.c` follows
+  the S/PDIF spec, but the ESP32 32-bit I2S peripheral may half-word-swap; if a
+  scope/DAC shows a swapped stream, set `SPDIF_SWAP_WORDS=1`.
+- **AAC framing**: A2DP AAC is decoded as raw AAC-LC (no ADTS) at 44.1 kHz stereo
+  (the iPhone case). Other sources/rates need the `M24` codec-capability element
+  parsed in `main/bt_av.c`.

@@ -1,134 +1,101 @@
-# Wireless iPhone → Chord Mojo Audio Bridge (Raspberry Pi Pico 2W)
+# Wireless iPhone → Chord Mojo Audio Bridge (ESP32-WROOM)
 
-Firmware that turns a **Raspberry Pi Pico 2W** (RP2350 + CYW43439) into a tiny,
-low-power wireless audio bridge: your **iPhone streams over Bluetooth (A2DP)**,
-the Pico decodes it and outputs **S/PDIF** (or I2S) into a **Chord Mojo** DAC.
+Firmware that turns an **ESP32-WROOM** into a tiny wireless audio bridge: your
+**iPhone streams over Bluetooth (A2DP, AAC)**, the ESP32 decodes it and outputs
+**S/PDIF** into a **Chord Mojo** DAC.
 
-This is a microcontroller port of a Raspberry Pi 3B+ prototype that used
-`BlueZ → PipeWire → USB Audio host → Mojo`.
+This is a microcontroller port of a Raspberry Pi 3B+ prototype
+(`BlueZ → PipeWire → USB Audio host → Mojo`). It targets the classic ESP32
+specifically to gain **AAC** — the higher-quality codec the iPhone actually uses.
 
 ```
- iPhone  ──A2DP / SBC──▶  CYW43439  ──▶  BTstack A2DP sink  ──▶  SBC decode
-                                                                    │
-                                        drift-compensated buffer ◀──┘
-                                                    │
-                              pico_audio (S/PDIF or I2S) via PIO + DMA
-                                                    │
-                                     S/PDIF ─(optical/coax)─▶  Chord Mojo ─▶ headphones
+ iPhone ──A2DP/AAC──▶ ESP32 Bluedroid A2DP sink (external codec)
+        ──▶ AAC decode (esp_audio_codec) / SBC fallback
+        ──▶ ring buffer + drift policy
+        ──▶ software I2S → S/PDIF (biphase-mark) ──▶ Chord Mojo ──▶ headphones
 ```
 
-## Why S/PDIF instead of USB?
+## Why ESP32-WROOM + AAC (and why still S/PDIF)
 
-The Pi used USB because Linux ships a USB-Audio **host** driver. No small MCU
-has both the pieces this bridge needs at once:
-
-| Chip | Bluetooth Classic (A2DP) | USB Audio **host** |
-|------|--------------------------|--------------------|
-| ESP32 (classic) | yes | no (UART bridge only) |
-| ESP32-S3 | no (BLE only) | yes (OTG) |
-| **Pico 2W (RP2350 + CYW43439)** | **yes** (BTstack) | not off-the-shelf |
-
-Writing a UAC2 USB-host stack on an MCU is a large, high-risk effort. The Mojo,
-however, natively accepts **optical TOSLINK** and **3.5 mm coax S/PDIF**, and
-S/PDIF is trivial to generate from the RP2350 PIO. A2DP only carries 44.1/48 kHz,
-which is well within S/PDIF limits. See [docs/wiring.md](docs/wiring.md).
+- The **iPhone only uses AAC or SBC** over A2DP (never aptX/LDAC — Apple doesn't
+  license them). AAC is the meaningful quality upgrade over SBC.
+- The classic **ESP32-WROOM has Bluetooth Classic** (needed for A2DP) and, via
+  the recent ESP-IDF **external-codec A2DP sink** API, can hand raw AAC frames to
+  the app, where **`esp_audio_codec`** decodes them.
+- The ESP32 has **no USB host**, so — like the Pico approach — it reaches the
+  Mojo over **S/PDIF** (the Mojo natively accepts optical/coax). S/PDIF is
+  generated in software from the I2S peripheral. See [docs/wiring.md](docs/wiring.md).
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| [`firmware/main.c`](firmware/main.c) | Entry point: CYW43/BT init, LED status, run loop |
-| [`firmware/a2dp_sink.c`](firmware/a2dp_sink.c) | A2DP sink + AVRCP + SBC decode + drift compensation |
-| [`firmware/audio_output.c`](firmware/audio_output.c) | `btstack_audio_sink_t` HAL over `pico_audio` (S/PDIF or I2S) |
-| [`firmware/btstack_config.h`](firmware/btstack_config.h) | Classic-only BTstack configuration |
-| [`firmware/CMakeLists.txt`](firmware/CMakeLists.txt) | Build options (backend, GPIOs, BT name) |
-| [`docs/wiring.md`](docs/wiring.md) | S/PDIF coax attenuator + TOSLINK wiring, BOM |
+| [`main/main.c`](main/main.c) | App entry: NVS, classic BT bring-up, LED status, task startup |
+| [`main/bt_av.c`](main/bt_av.c) | GAP (SSP) + A2DP sink (external codec) + AVRCP; registers AAC+SBC endpoints |
+| [`main/audio_render.c`](main/audio_render.c) | Encoded-frame ring buffer + AAC/SBC decode + drift policy |
+| [`main/spdif_out.c`](main/spdif_out.c) | Clean-room biphase-mark S/PDIF encoder over I2S |
+| [`main/bt_app_core.c`](main/bt_app_core.c) | Work-dispatch task for Bluedroid callbacks |
+| [`sdkconfig.defaults`](sdkconfig.defaults) | BR/EDR-only, A2DP external codec, 240 MHz |
+| [`docs/wiring.md`](docs/wiring.md) | S/PDIF wiring (coax + TOSLINK), optional WM8804, BOM |
 
 ## Prerequisites
 
-- ARM cross toolchain: `gcc-arm-none-eabi`, `libnewlib-arm-none-eabi`, `libstdc++-arm-none-eabi-newlib`
-- Host build tools (for `picotool`/`pioasm`): `build-essential`, `cmake`, `libusb-1.0-0-dev`, `python3`
-- The **Pico SDK** and **pico-extras** (SDK ≥ 2.0 for RP2350 / Pico 2W).
-
-By default `CMakeLists.txt` auto-detects the SDK/extras at `~/pico/pico-sdk` and
-`~/pico/pico-extras`. Otherwise pass `-DPICO_SDK_PATH=...` / `-DPICO_EXTRAS_PATH=...`
-or export `PICO_SDK_PATH` / `PICO_EXTRAS_PATH`.
-
-```bash
-# one-time SDK setup (if not already present)
-mkdir -p ~/pico
-git clone --branch master https://github.com/raspberrypi/pico-sdk.git ~/pico/pico-sdk
-git -C ~/pico/pico-sdk submodule update --init lib/btstack lib/cyw43-driver lib/lwip lib/tinyusb
-git clone --branch master https://github.com/raspberrypi/pico-extras.git ~/pico/pico-extras
-```
+- **ESP-IDF v5.5.x** (installed to `~/esp/esp-idf` by the setup/update script)
+  with the esp32 toolchain. Source it once per shell:
+  ```bash
+  . ~/esp/esp-idf/export.sh
+  ```
+- The **`espressif/esp_audio_codec`** managed component (fetched automatically by
+  the IDF component manager on first `reconfigure`/`build`).
 
 ## Build
 
 ```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j4
-# -> build/firmware/mojo_bt_bridge.uf2
+. ~/esp/esp-idf/export.sh          # once per shell
+idf.py set-target esp32            # once (generates sdkconfig from defaults)
+idf.py build                       # -> build/mojo_bt_bridge.bin
 ```
 
-### Build options (`-D...`)
+Optional overrides (compile definitions in [`main/CMakeLists.txt`](main/CMakeLists.txt)
+and headers): `SPDIF_GPIO` (default **27**), `STATUS_LED_GPIO` (default **2**),
+`BT_DEVICE_NAME` (default `Mojo BT Bridge`).
 
-| Option | Default | Notes |
-|--------|---------|-------|
-| `AUDIO_OUTPUT` | `spdif` | `spdif` (Mojo coax/optical) or `i2s` (PCM5102 bring-up) |
-| `SPDIF_PIN` | `18` | GPIO for the S/PDIF data line |
-| `I2S_DATA_PIN` | `9` | I2S DIN (I2S mode) |
-| `I2S_CLOCK_PIN_BASE` | `10` | I2S BCLK + LRCLK base (I2S mode) |
-| `BT_DEVICE_NAME` | `Mojo BT Bridge` | Name shown when pairing |
-
-Example (I2S bring-up build):
+## Flash & monitor
 
 ```bash
-cmake -B build-i2s -S . -DAUDIO_OUTPUT=i2s -DI2S_DATA_PIN=9 -DI2S_CLOCK_PIN_BASE=10
-cmake --build build-i2s -j4
+idf.py -p /dev/ttyUSB0 flash monitor
 ```
-
-## Flash
-
-Hold **BOOTSEL** while plugging in the Pico 2W, then either:
-
-```bash
-picotool load -x build/firmware/mojo_bt_bridge.uf2
-```
-
-or copy `build/firmware/mojo_bt_bridge.uf2` onto the `RP2350` USB mass-storage
-drive that appears.
 
 ## Use / verify (requires hardware)
 
-1. Wire the S/PDIF output (see [docs/wiring.md](docs/wiring.md)) to the Mojo's
-   optical or coax input. For first bring-up you can instead use an I2S build
-   with a PCM5102 board and headphones.
-2. Power the Pico. The onboard LED **slow-blinks** when it is discoverable.
-3. On the iPhone: **Settings → Bluetooth**, pair with **"Mojo BT Bridge"**. LED
-   goes **solid** on connect.
-4. Play audio. The Mojo's sample-rate ball should light for **44.1 kHz** and you
-   should hear audio. Status logs stream over USB serial (115200):
-   `tail -f /dev/ttyACM0` or `picotool ... ` / any serial monitor.
+1. Wire the S/PDIF output on **GPIO27** to the Mojo's optical or coax input
+   (see [docs/wiring.md](docs/wiring.md)).
+2. Power the ESP32. The status LED **blinks** while discoverable.
+3. On the iPhone: **Settings → Bluetooth**, pair with **"Mojo BT Bridge"**. The
+   LED goes **solid** on connect.
+4. Play audio. Expected serial log:
+   ```
+   === Mojo BT Bridge (ESP32-WROOM) ===
+   [bt_av] discoverable as "Mojo BT Bridge" - pair from the iPhone
+   [bt_av] codec configured: AAC (assuming 44100 Hz stereo AAC-LC)
+   [render] opened AAC decoder (44100 Hz, 2 ch)
+   [spdif] init S/PDIF on GPIO27, fs=44100 Hz ...
+   ```
+   The Mojo's sample-rate ball should light for **44.1 kHz** and play audio.
 
-Expected serial output:
+## Status & limitations
 
-```
-=== Mojo BT Bridge (Pico 2W) ===
-[audio] output backend: S/PDIF
-[bt] BTstack up on <addr>, discoverable as "Mojo BT Bridge"
-[a2dp] SBC config: 2 ch, 44100 Hz, ...
-[a2dp] stream started
-[avrcp] title: <song>
-```
-
-## Notes & limitations
-
-- **Codec:** SBC only in v1 (built into BTstack). The iPhone negotiates SBC
-  automatically. AAC is a possible future upgrade (see below).
-- **Clock drift:** the Bluetooth source clock and the local S/PDIF clock differ
-  slightly; a resampler nudges the rate based on the SBC buffer fill level.
-- **Volume:** kept bit-perfect in the digital stream; use the Mojo's volume.
-  AVRCP absolute-volume changes are logged.
-- **Optional / future work:** AAC decode via Fraunhofer FDK-AAC (licensing +
-  CPU cost) and a battery/enclosure for a portable unit — see
-  [docs/wiring.md](docs/wiring.md).
+- **Codec:** AAC primary (iPhone), SBC fallback — both decoded by
+  `esp_audio_codec`. aptX/LDAC are intentionally out of scope (iPhone never uses them).
+- **S/PDIF is software-generated** (see recommendation in [docs/wiring.md](docs/wiring.md)).
+  The BMC bit/word ordering of the ESP32 I2S peripheral should be confirmed on a
+  scope/DAC; a `SPDIF_SWAP_WORDS` compile switch is provided for the known
+  32-bit half-word-swap quirk.
+- **Drift:** simple policy (drop encoded frames on overflow, insert silence on
+  underflow); the S/PDIF clock follows the decoder's reported rate. Fractional
+  resampling is a future refinement.
+- **AAC framing:** A2DP AAC is treated as raw AAC-LC (no ADTS) at 44.1 kHz
+  stereo, matching the iPhone. Non-Apple / non-44.1 sources would need the M24
+  codec-capability element parsed in [`bt_av.c`](main/bt_av.c).
+- Hardware-in-the-loop (real iPhone pairing + Mojo lock) can't run in CI; the
+  in-repo gate is a clean `idf.py build`.
