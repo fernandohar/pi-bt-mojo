@@ -1,0 +1,19 @@
+# Build output
+/build*/
+build/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.dis
+*.map
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Editor / OS
+.DS_Store
+*.swp
+.vscode/
