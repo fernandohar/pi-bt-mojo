@@ -1,0 +1,6 @@
+## IDF Component Manager dependencies for the Mojo BT bridge.
+dependencies:
+  idf: ">=5.5.0"
+  # Espressif audio codec library - provides the AAC decoder used to decode
+  # the A2DP AAC stream from the iPhone (external-codec A2DP sink path).
+  espressif/esp_audio_codec: "^2.5.0"

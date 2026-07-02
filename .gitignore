@@ -1,0 +1,13 @@
+# Build output
+/build*/
+build/
+
+# ESP-IDF generated
+sdkconfig
+sdkconfig.old
+managed_components/
+
+# Editor / OS
+.DS_Store
+*.swp
+.vscode/
