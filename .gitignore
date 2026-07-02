@@ -1,17 +1,11 @@
 # Build output
 /build*/
 build/
-*.uf2
-*.elf
-*.bin
-*.hex
-*.dis
-*.map
 
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
+# ESP-IDF generated
+sdkconfig
+sdkconfig.old
+managed_components/
 
 # Editor / OS
 .DS_Store
