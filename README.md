@@ -38,6 +38,66 @@ specifically to gain **AAC** — the higher-quality codec the iPhone actually us
 | [`sdkconfig.defaults`](sdkconfig.defaults) | BR/EDR-only, A2DP external codec, 240 MHz |
 | [`docs/wiring.md`](docs/wiring.md) | S/PDIF wiring (coax + TOSLINK), optional WM8804, BOM |
 
+## Build & flash on macOS (Apple Silicon / M1)
+
+Full from-scratch setup on a MacBook (M1/M2, macOS with Python ≥ 3.9).
+
+### 1. Install the prerequisites (Homebrew)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"  # if you don't have brew
+brew install cmake ninja dfu-util python3 git
+```
+
+### 2. Install ESP-IDF (pick ONE)
+
+**Option A - VS Code (recommended, GUI):**
+1. Install [VS Code](https://code.visualstudio.com/) (Apple Silicon build).
+2. Install the **"Espressif IDF"** extension from the Marketplace.
+3. Run command palette → **"ESP-IDF: Configure ESP-IDF Extension"** → *Express* → choose **v5.5.x** and target **esp32**. It downloads the toolchain for you.
+
+**Option B - Command line:**
+
+```bash
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
+cd ~/esp/esp-idf && ./install.sh esp32
+echo '. $HOME/esp/esp-idf/export.sh >/dev/null 2>&1' >> ~/.zshrc   # auto-load in new terminals
+```
+
+### 3. Get the source and build
+
+```bash
+git clone https://github.com/fernandohar/pi-bt-mojo.git
+cd pi-bt-mojo
+. ~/esp/esp-idf/export.sh          # if not auto-loaded (VS Code does this for you)
+idf.py set-target esp32
+idf.py build
+```
+
+### 4. USB driver + connect the ESP32
+
+Most ESP32 dev boards use a **CP2102** (Silicon Labs) or **CH340/CH9102** (WCH) USB-UART chip:
+- **CP2102:** usually works on modern macOS; if not, install the [Silicon Labs CP210x VCP driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers).
+- **CH340/CH9102:** install the [WCH macOS driver](https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html).
+
+Plug the board in with a **data-capable USB cable** (not charge-only), then find the port:
+
+```bash
+ls /dev/cu.*        # e.g. /dev/cu.usbserial-0001, /dev/cu.SLAB_USBtoUART, /dev/cu.wchusbserial*
+```
+
+### 5. Flash and watch the logs
+
+```bash
+idf.py -p /dev/cu.usbserial-0001 flash monitor     # use your port; Ctrl-] to exit monitor
+```
+
+(VS Code: pick the port in the bottom bar, then the flame **Flash** and plug **Monitor** buttons.)
+
+Then wire the S/PDIF output (**GPIO27**) to the Mojo per [docs/wiring.md](docs/wiring.md),
+pair the iPhone with **"Mojo BT Bridge"**, and play.
+
 ## Prerequisites
 
 - **ESP-IDF v5.5.x** (installed to `~/esp/esp-idf` by the setup/update script)
