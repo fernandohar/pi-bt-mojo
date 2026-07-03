@@ -51,58 +51,87 @@ static const uint8_t PREAMBLE_B[8] = {1, 1, 1, 0, 1, 0, 0, 0}; /* block start, l
 static const uint8_t PREAMBLE_M[8] = {1, 1, 1, 0, 0, 0, 1, 0}; /* left */
 static const uint8_t PREAMBLE_W[8] = {1, 1, 1, 0, 0, 1, 0, 0}; /* right */
 
+/*
+ * Precomputed biphase-mark tables (built once) so a whole byte encodes with one
+ * lookup instead of a per-bit loop. This is what makes real-time 44.1 kHz
+ * software S/PDIF feasible without pegging the CPU.
+ *
+ *   s_bmc0[b]    : 16-bit BMC of byte b (bits sent LSB-first), starting level 0,
+ *                  first UI in bit15. For starting level 1, use ~s_bmc0[b].
+ *   s_bmc_end[b] : ending UI level after encoding byte b from starting level 0.
+ */
+static uint16_t s_bmc0[256];
+static uint8_t  s_bmc_end[256];
+static bool     s_tables_ready;
+
+static void build_tables(void)
+{
+    for (int b = 0; b < 256; b++) {
+        uint16_t pat = 0;
+        uint8_t level = 0;
+        for (int i = 0; i < 8; i++) {           /* bit i, LSB first */
+            uint8_t bit = (b >> i) & 1u;
+            uint8_t u1 = !level;                 /* transition at UI-pair start */
+            uint8_t u2 = bit ? level : u1;       /* mid transition for '1' */
+            if (u1) pat |= (uint16_t)(1u << (15 - 2 * i));
+            if (u2) pat |= (uint16_t)(1u << (15 - 2 * i - 1));
+            level = u2;
+        }
+        s_bmc0[b] = pat;
+        s_bmc_end[b] = level;
+    }
+    s_tables_ready = true;
+}
+
 /* Build one 64-UI subframe into out[2] (MSB-first: UI0 -> bit31 of out[0]). */
 static void build_subframe(uint16_t sample, const uint8_t *preamble, uint32_t out[2])
 {
-    uint8_t ui[64];
-    int n = 0;
+    uint64_t sf = 0;
+    uint8_t prev = s_prev;
 
-    /* preamble: fixed pattern, inverted if the previous UI was high */
+    /* preamble: 8 UI at bits 63..56, inverted if the previous UI was high */
+    uint8_t pre = 0;
     for (int i = 0; i < 8; i++) {
         uint8_t lvl = preamble[i];
-        if (s_prev) {
+        if (prev) {
             lvl = !lvl;
         }
-        ui[n++] = lvl;
-    }
-    s_prev = ui[n - 1];
-
-    /* 24-bit sample field (slots 4..27), 16-bit audio in the upper 16 bits */
-    uint32_t s24 = ((uint32_t)(uint16_t)sample) << 8;
-
-    /* 28 data bits: 24 sample + V + U + C + P */
-    uint8_t bits[28];
-    for (int i = 0; i < 24; i++) {
-        bits[i] = (s24 >> i) & 1u;
-    }
-    bits[24] = 0; /* Validity */
-    bits[25] = 0; /* User data */
-    bits[26] = 0; /* Channel status (consumer, PCM) */
-    uint8_t par = 0;
-    for (int i = 0; i < 27; i++) {
-        par ^= bits[i];
-    }
-    bits[27] = par; /* even parity over slots 4..31 */
-
-    /* biphase-mark encode each data bit to 2 UI */
-    for (int i = 0; i < 28; i++) {
-        uint8_t u1 = !s_prev;                 /* transition at UI-pair start */
-        uint8_t u2 = bits[i] ? s_prev : u1;   /* mid transition for '1' */
-        ui[n++] = u1;
-        ui[n++] = u2;
-        s_prev = u2;
-    }
-
-    /* pack MSB-first */
-    out[0] = 0;
-    out[1] = 0;
-    for (int i = 0; i < 64; i++) {
-        if (ui[i]) {
-            int w = i >> 5;
-            int bit = 31 - (i & 31);
-            out[w] |= (1u << bit);
+        if (lvl) {
+            pre |= (uint8_t)(1u << (7 - i));
         }
     }
+    sf |= (uint64_t)pre << 56;
+    prev = pre & 1u; /* last preamble UI */
+
+    /* 24-bit sample field (slots 4..27): 16-bit audio in the upper 16 bits.
+     * Sent LSB-first as 3 bytes; byte0 is always 0 (low 8 bits). */
+    uint32_t field = ((uint32_t)(uint16_t)sample) << 8;
+    uint8_t bytes[3] = { (uint8_t)field, (uint8_t)(field >> 8), (uint8_t)(field >> 16) };
+    int shift = 40; /* bits 55..40, 39..24, 23..8 */
+    for (int k = 0; k < 3; k++) {
+        uint8_t b = bytes[k];
+        uint16_t chunk = prev ? (uint16_t)~s_bmc0[b] : s_bmc0[b];
+        sf |= (uint64_t)chunk << shift;
+        prev = prev ? !s_bmc_end[b] : s_bmc_end[b];
+        shift -= 16;
+    }
+
+    /* V(0) U(0) C(0) P at slots 28..31 -> 8 UI at bits 7..0.
+     * P = even parity over slots 4..31; V/U/C are 0 so it's parity of the sample. */
+    uint8_t vucp[4] = { 0, 0, 0, (uint8_t)(__builtin_popcount((unsigned)(uint16_t)sample) & 1) };
+    uint8_t v8 = 0;
+    for (int j = 0; j < 4; j++) {
+        uint8_t u1 = !prev;
+        uint8_t u2 = vucp[j] ? prev : u1;
+        if (u1) v8 |= (uint8_t)(1u << (7 - 2 * j));
+        if (u2) v8 |= (uint8_t)(1u << (7 - 2 * j - 1));
+        prev = u2;
+    }
+    sf |= (uint64_t)v8;
+
+    s_prev = prev;
+    out[0] = (uint32_t)(sf >> 32);
+    out[1] = (uint32_t)sf;
 #if SPDIF_SWAP_WORDS
     out[0] = (out[0] << 16) | (out[0] >> 16);
     out[1] = (out[1] << 16) | (out[1] >> 16);
@@ -158,6 +187,9 @@ esp_err_t spdif_out_init(int gpio_dout, uint32_t sample_rate_hz)
     s_fs = sample_rate_hz;
     s_prev = 0;
     s_block_frame = 0;
+    if (!s_tables_ready) {
+        build_tables();
+    }
     ESP_LOGI(TAG, "init S/PDIF on GPIO%d, fs=%" PRIu32 " Hz (I2S %.1f MHz bit clock)",
              gpio_dout, sample_rate_hz, (sample_rate_hz * 128.0) / 1e6);
     return spdif_i2s_start(sample_rate_hz);
