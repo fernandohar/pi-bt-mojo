@@ -153,6 +153,12 @@ only exists on **ESP-IDF v6 / `master`** (not v5.5.x). Verified building on
 **ESP-IDF v6.2.0**. The AAC decode path and endpoint are already in the code; you
 just need the newer toolchain and two build flags.
 
+> Status (2026-07): AAC sink is currently **broken upstream** — on ESP-IDF
+> `v6.1-dev-6126` the AAC stream fails to open on hardware, and Espressif's own
+> `a2dp_sink_stream_aac` example reproduces it. Tracking:
+> https://github.com/espressif/esp-idf/issues/18786 . Use SBC until it's fixed;
+> the recipe below is correct and ready for a fixed ESP-IDF.
+
 1. Install ESP-IDF v6 (master) alongside your existing IDF:
    ```bash
    mkdir -p ~/esp && cd ~/esp

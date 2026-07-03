@@ -66,6 +66,7 @@ our config (`CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y`), AAC CIE, and AVRCP-optional
 all match the reference. Conclusion: AAC sink is not usable on this snapshot.
 Use SBC (default, v5.5.1) until a newer/stable ESP-IDF fixes AAC sink; then
 re-test with `-DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0`.
+Upstream tracking issue: https://github.com/espressif/esp-idf/issues/18786
 
 ### Two ESP-IDF versions on one machine (gotcha)
 The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
