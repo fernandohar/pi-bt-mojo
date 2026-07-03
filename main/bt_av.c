@@ -214,8 +214,26 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
 /* ---------------------------------------------------------------------------
  * Stack-up: register everything and go discoverable
  * ------------------------------------------------------------------------- */
+/*
+ * Codec endpoints.
+ *
+ * IMPORTANT: full AAC A2DP-*sink* stream negotiation only exists on ESP-IDF
+ * master (gated by BT_A2DP_CODEC_AAC_ENABLED). On stable releases (e.g. v5.5.1)
+ * the external-codec path can pass data but cannot complete the AAC stream open,
+ * so if we advertise AAC the iPhone selects it and the stream open fails
+ * (BTA_AV_OPEN_EVT::FAILED / BTA_AV_FAIL_STREAM). We therefore advertise
+ * SBC only by default; define MOJO_ENABLE_AAC=1 (only on ESP-IDF master with
+ * CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y) to also offer AAC.
+ */
+#ifndef MOJO_ENABLE_AAC
+#define MOJO_ENABLE_AAC 0
+#endif
+
 static void register_stream_endpoints(void)
 {
+    uint8_t seid = 0;
+
+#if MOJO_ENABLE_AAC
     /* AAC (M24) endpoint - broad capabilities so the iPhone selects AAC-LC */
     esp_a2d_mcc_t aac = { 0 };
     aac.type = ESP_A2D_MCT_M24;
@@ -228,9 +246,11 @@ static void register_stream_endpoints(void)
     aac.cie.m24_info.br1 = 0x7f;
     aac.cie.m24_info.br2 = 0xff;
     aac.cie.m24_info.br3 = 0xff;
-    esp_a2d_sink_register_stream_endpoint(0, &aac);
+    esp_a2d_sink_register_stream_endpoint(seid++, &aac);
+    ESP_LOGI(BT_AV_TAG, "registered AAC endpoint (requires ESP-IDF master)");
+#endif
 
-    /* SBC endpoint (mandatory fallback), bitpool 2..53, all freqs/modes */
+    /* SBC endpoint (mandatory, works on all IDF releases) */
     esp_a2d_mcc_t sbc = { 0 };
     sbc.type = ESP_A2D_MCT_SBC;
     sbc.cie.sbc_info.samp_freq = 0xf;
@@ -240,7 +260,8 @@ static void register_stream_endpoints(void)
     sbc.cie.sbc_info.alloc_mthd = 0x3;
     sbc.cie.sbc_info.max_bitpool = 53;
     sbc.cie.sbc_info.min_bitpool = 2;
-    esp_a2d_sink_register_stream_endpoint(1, &sbc);
+    esp_a2d_sink_register_stream_endpoint(seid++, &sbc);
+    ESP_LOGI(BT_AV_TAG, "registered SBC endpoint");
 }
 
 void bt_av_hdl_stack_evt(uint16_t event, void *p_param)

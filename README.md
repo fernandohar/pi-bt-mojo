@@ -5,8 +5,10 @@ Firmware that turns an **ESP32-WROOM** into a tiny wireless audio bridge: your
 **S/PDIF** into a **Chord Mojo** DAC.
 
 This is a microcontroller port of a Raspberry Pi 3B+ prototype
-(`BlueZ → PipeWire → USB Audio host → Mojo`). It targets the classic ESP32
-specifically to gain **AAC** — the higher-quality codec the iPhone actually uses.
+(`BlueZ → PipeWire → USB Audio host → Mojo`). It targets the classic ESP32 to
+pursue **AAC** (the iPhone's higher-quality codec). Note: on stable ESP-IDF the
+bridge currently runs on **SBC** — AAC A2DP-sink negotiation requires ESP-IDF
+`master` (see Status & limitations). aptX/LDAC don't apply (the iPhone never uses them).
 
 ```
  iPhone ──A2DP/AAC──▶ ESP32 Bluedroid A2DP sink (external codec)
@@ -160,11 +162,21 @@ idf.py -p /dev/ttyUSB0 flash monitor
   USB-UART driver (CP210x or CH34x).
 - **Mojo won't lock to S/PDIF:** rebuild with `idf.py build -DSPDIF_SWAP_WORDS=1`
   (ESP32 32-bit I2S half-word-swap quirk); check the coax attenuator / TOSLINK wiring.
+- **iPhone connects then drops** with `BTA_AV_OPEN_EVT::FAILED status: 3`
+  (`BTA_AV_FAIL_STREAM`), often with `BT_AVCT: Out of ccbs`: the phone selected a
+  codec the stack can't open. On stable IDF this happens if AAC is advertised —
+  the firmware defaults to **SBC only** to avoid it. If you enabled
+  `MOJO_ENABLE_AAC` without being on ESP-IDF `master`, rebuild without it.
 
 ## Status & limitations
 
-- **Codec:** AAC primary (iPhone), SBC fallback — both decoded by
-  `esp_audio_codec`. aptX/LDAC are intentionally out of scope (iPhone never uses them).
+- **Codec:** **SBC by default** on stable ESP-IDF (v5.5.1). Full **AAC**
+  A2DP-*sink* stream negotiation only exists on **ESP-IDF `master`** (gated by
+  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); advertising AAC on a stable release makes
+  the iPhone select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`).
+  So the firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a
+  suitable `master` toolchain. Both codecs are decoded by `esp_audio_codec`.
+  aptX/LDAC are out of scope (iPhone never uses them).
 - **S/PDIF is software-generated** (see recommendation in [docs/wiring.md](docs/wiring.md)).
   The BMC bit/word ordering of the ESP32 I2S peripheral should be confirmed on a
   scope/DAC; a `SPDIF_SWAP_WORDS` compile switch is provided for the known

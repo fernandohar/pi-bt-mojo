@@ -20,3 +20,10 @@ if(NOT DEFINED BT_DEVICE_NAME)
     set(BT_DEVICE_NAME "Mojo BT Bridge")
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE BT_DEVICE_NAME=\"${BT_DEVICE_NAME}\")
+
+# AAC A2DP-sink endpoint. OFF by default: full AAC sink negotiation only exists
+# on ESP-IDF master (CONFIG_BT_A2DP_CODEC_AAC_ENABLED). On stable IDF the bridge
+# runs on SBC. Enable with -DMOJO_ENABLE_AAC=1 only when on a suitable IDF.
+if(MOJO_ENABLE_AAC)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MOJO_ENABLE_AAC=1)
+endif()
