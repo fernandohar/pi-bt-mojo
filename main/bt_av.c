@@ -229,6 +229,15 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
 #define MOJO_ENABLE_AAC 0
 #endif
 
+/*
+ * Registering an AAC endpoint is only useful if the Bluedroid stack was built
+ * with AAC negotiation support. Fail loudly rather than produce a binary that
+ * advertises AAC but can't open the stream (BTA_AV_OPEN_EVT::FAILED).
+ */
+#if MOJO_ENABLE_AAC && !defined(CONFIG_BT_A2DP_CODEC_AAC_ENABLED)
+#error "MOJO_ENABLE_AAC=1 requires CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y (ESP-IDF v6+). Add the sdkconfig.defaults.aac overlay: -DSDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.aac\" and re-run set-target."
+#endif
+
 static void register_stream_endpoints(void)
 {
     uint8_t seid = 0;
