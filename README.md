@@ -143,6 +143,24 @@ idf.py -p /dev/ttyUSB0 flash monitor
    ```
    The Mojo's sample-rate ball should light for **44.1 kHz** and play audio.
 
+## Troubleshooting
+
+- **Boot loop with `E BOD: Brownout detector was triggered`** (reset right after
+  `phy_init` / Bluetooth radio power-up): this is a **power** issue, not a firmware
+  bug. The BT radio's current spike (largest during "full calibration") sags the
+  3.3 V rail below the brownout threshold. Fixes, in order: use a short good-quality
+  **data** USB cable; plug **directly** into the computer (no hub) or a powered hub;
+  power via **5V/VIN** from a solid supply; keep peripherals off the 3V3 pin until
+  it boots. Workaround if needed: `idf.py menuconfig` → *Component config → ESP
+  System Settings → Brownout detector* → lower the level or disable it (bench-test
+  only; fix the power too). Booting successfully once caches RF calibration in NVS,
+  reducing later boot current.
+- **Flash won't start / "Connecting…" fails:** hold the board's **BOOT** button
+  during connect; ensure you selected the right `/dev/cu.*` port and installed the
+  USB-UART driver (CP210x or CH34x).
+- **Mojo won't lock to S/PDIF:** rebuild with `idf.py build -DSPDIF_SWAP_WORDS=1`
+  (ESP32 32-bit I2S half-word-swap quirk); check the coax attenuator / TOSLINK wiring.
+
 ## Status & limitations
 
 - **Codec:** AAC primary (iPhone), SBC fallback — both decoded by
