@@ -64,8 +64,26 @@ brew install cmake ninja dfu-util python3 git
 mkdir -p ~/esp && cd ~/esp
 git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
 cd ~/esp/esp-idf && ./install.sh esp32
-echo '. $HOME/esp/esp-idf/export.sh >/dev/null 2>&1' >> ~/.zshrc   # auto-load in new terminals
 ```
+
+Then source it **per terminal** when you want to build:
+
+```bash
+. ~/esp/esp-idf/export.sh
+```
+
+Prefer an alias over auto-sourcing in `~/.zshrc`. Auto-sourcing one IDF in every
+shell makes it impossible to use a second version (e.g. v6 for AAC) in the same
+terminal. Recommended:
+
+```bash
+# in ~/.zshrc
+alias idf5='. $HOME/esp/esp-idf/export.sh'      # v5.5.x (SBC, default)
+alias idf6='. $HOME/esp/esp-idf-v6/export.sh'   # v6 (AAC)
+```
+
+Then run `idf5` (or `idf6`) once in each new terminal. Never source both in one
+shell — their Python environments conflict.
 
 ### 3. Get the source and build
 
