@@ -128,6 +128,47 @@ and headers): `SPDIF_GPIO` (default **27**), `STATUS_LED_GPIO` (default **2**),
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+## Building for AAC (ESP-IDF v6+)
+
+AAC gives better quality than SBC from the iPhone, but A2DP AAC-*sink* support
+only exists on **ESP-IDF v6 / `master`** (not v5.5.x). Verified building on
+**ESP-IDF v6.2.0**. The AAC decode path and endpoint are already in the code; you
+just need the newer toolchain and two build flags.
+
+1. Install ESP-IDF v6 (master) alongside your existing IDF:
+   ```bash
+   mkdir -p ~/esp && cd ~/esp
+   git clone -b master --recursive https://github.com/espressif/esp-idf.git esp-idf-v6
+   cd ~/esp/esp-idf-v6 && ./install.sh esp32
+   ```
+   Tip: use a **fresh terminal** for the v6 build — don't source two IDF versions
+   in the same shell (their Python envs conflict).
+
+2. Build with AAC enabled (separate build dir + sdkconfig so it never clashes with
+   the SBC build):
+   ```bash
+   . ~/esp/esp-idf-v6/export.sh
+   cd pi-bt-mojo
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig \
+     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.aac" \
+     -DMOJO_ENABLE_AAC=1 set-target esp32
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig build
+   ```
+
+3. Flash:
+   ```bash
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig -p /dev/cu.YOURPORT flash monitor
+   ```
+
+The iPhone will then negotiate AAC. Confirm in the log:
+```
+bt_av: registered AAC endpoint ...
+bt_av: codec configured: AAC ...
+render: opened AAC decoder (44100 Hz, 2 ch)
+```
+Everything downstream (drift buffer, S/PDIF, Mojo) is identical to the SBC path.
+To go back to SBC, just build normally (v5.5.x, no AAC flags).
+
 ## Use / verify (requires hardware)
 
 1. Wire the S/PDIF output on **GPIO27** to the Mojo's optical or coax input
@@ -171,12 +212,12 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ## Status & limitations
 
 - **Codec:** **SBC by default** on stable ESP-IDF (v5.5.1). Full **AAC**
-  A2DP-*sink* stream negotiation only exists on **ESP-IDF `master`** (gated by
-  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); advertising AAC on a stable release makes
-  the iPhone select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`).
-  So the firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a
-  suitable `master` toolchain. Both codecs are decoded by `esp_audio_codec`.
-  aptX/LDAC are out of scope (iPhone never uses them).
+  A2DP-*sink* stream negotiation requires **ESP-IDF v6+ / `master`** (gated by
+  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); on v5.5.x advertising AAC makes the iPhone
+  select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`). So the
+  firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a v6+
+  toolchain (see [Building for AAC](#building-for-aac-esp-idf-v6)). Both codecs
+  decode via `esp_audio_codec`. aptX/LDAC are out of scope (iPhone never uses them).
 - **S/PDIF is software-generated** (see recommendation in [docs/wiring.md](docs/wiring.md)).
   The BMC bit/word ordering of the ESP32 I2S peripheral should be confirmed on a
   scope/DAC; a `SPDIF_SWAP_WORDS` compile switch is provided for the known

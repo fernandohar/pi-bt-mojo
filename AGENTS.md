@@ -46,10 +46,20 @@ Mojo audio bridge (A2DP AAC in, software S/PDIF out). It cross-compiles to a
   parsed in `main/bt_av.c`.
 
 ### Codec status (important)
-Full **AAC A2DP-sink** stream negotiation only exists on **ESP-IDF `master`**
+Full **AAC A2DP-sink** stream negotiation only exists on **ESP-IDF v6 / `master`**
 (`CONFIG_BT_A2DP_CODEC_AAC_ENABLED`), NOT on v5.5.1. On stable IDF, advertising
 AAC makes the source pick it and the stream open fails
 (`BTA_AV_OPEN_EVT::FAILED status: 3` / `BTA_AV_FAIL_STREAM`, often preceded by
 `BT_AVCT: Out of ccbs`). So `main/bt_av.c` advertises **SBC only** by default;
-`-DMOJO_ENABLE_AAC=1` adds the AAC endpoint and must only be used on a `master`
-toolchain with the AAC config enabled. Both codecs decode via `esp_audio_codec`.
+`-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac` adds the AAC endpoint on a v6+
+toolchain. Both codecs decode via `esp_audio_codec`. The A2DP external-codec API
+is identical between v5.5.1 and v6, so no source changes are needed for AAC — only
+the newer toolchain + build flags (see README "Building for AAC"). Verified
+building on ESP-IDF v6.2.0.
+
+### Two ESP-IDF versions on one machine (gotcha)
+The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
+source both in one shell — their Python venvs conflict (`export.sh` fails with a
+venv-mismatch error). Use a fresh shell per version, or unset
+`IDF_PATH`/`IDF_PYTHON_ENV_PATH` before sourcing the other. Keep the two builds in
+separate dirs with separate sdkconfigs (`-B build-aac -DSDKCONFIG=build-aac/sdkconfig`).
