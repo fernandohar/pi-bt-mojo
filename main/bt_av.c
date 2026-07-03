@@ -234,20 +234,30 @@ static void register_stream_endpoints(void)
     uint8_t seid = 0;
 
 #if MOJO_ENABLE_AAC
-    /* AAC (M24) endpoint - broad capabilities so the iPhone selects AAC-LC */
+    /* AAC (M24) endpoint. Uses the proper A2DP AAC codec-capability constants
+     * (matching the ESP-IDF v6 a2dp_sink_stream_aac example); v6's real AAC
+     * negotiation validates the CIE, so raw 0xff values are rejected and the
+     * stream fails to open. */
     esp_a2d_mcc_t aac = { 0 };
     aac.type = ESP_A2D_MCT_M24;
-    aac.cie.m24_info.obj_type = 0x7f; /* support all AAC object types */
-    aac.cie.m24_info.drc = 0;
-    aac.cie.m24_info.samp_freq1 = 0xff;
-    aac.cie.m24_info.samp_freq2 = 0x0f;
-    aac.cie.m24_info.ch = 0x0f;       /* mono + stereo */
-    aac.cie.m24_info.vbr = 1;
-    aac.cie.m24_info.br1 = 0x7f;
-    aac.cie.m24_info.br2 = 0xff;
-    aac.cie.m24_info.br3 = 0xff;
+    aac.cie.m24_info.drc = ESP_A2D_M24_CIE_DRC_NS;
+    aac.cie.m24_info.obj_type = ESP_A2D_M24_CIE_OBJ_TYPE_2_AAC_LC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_AAC_LC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_HE_AAC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_HE_AAC_V2;
+    aac.cie.m24_info.samp_freq1 = ESP_A2D_M24_CIE_SF1_8K | ESP_A2D_M24_CIE_SF1_11K |
+                                  ESP_A2D_M24_CIE_SF1_12K | ESP_A2D_M24_CIE_SF1_16K |
+                                  ESP_A2D_M24_CIE_SF1_22K | ESP_A2D_M24_CIE_SF1_24K |
+                                  ESP_A2D_M24_CIE_SF1_32K | ESP_A2D_M24_CIE_SF1_44K;
+    aac.cie.m24_info.samp_freq2 = ESP_A2D_M24_CIE_SF2_48K | ESP_A2D_M24_CIE_SF2_64K |
+                                  ESP_A2D_M24_CIE_SF2_88K | ESP_A2D_M24_CIE_SF2_96K;
+    aac.cie.m24_info.ch = ESP_A2D_M24_CIE_CH_1 | ESP_A2D_M24_CIE_CH_2;
+    aac.cie.m24_info.vbr = ESP_A2D_M24_CIE_VBR_SUPPORT;
+    aac.cie.m24_info.br1 = 0x7F & ESP_A2D_M24_CIE_BR1_MSK;
+    aac.cie.m24_info.br2 = 0xFF & ESP_A2D_M24_CIE_BR2_MSK;
+    aac.cie.m24_info.br3 = 0xFF & ESP_A2D_M24_CIE_BR3_MSK;
     esp_a2d_sink_register_stream_endpoint(seid++, &aac);
-    ESP_LOGI(BT_AV_TAG, "registered AAC endpoint (requires ESP-IDF master)");
+    ESP_LOGI(BT_AV_TAG, "registered AAC endpoint");
 #endif
 
     /* SBC endpoint (mandatory, works on all IDF releases) */
