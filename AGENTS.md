@@ -44,3 +44,12 @@ Mojo audio bridge (A2DP AAC in, software S/PDIF out). It cross-compiles to a
 - **AAC framing**: A2DP AAC is decoded as raw AAC-LC (no ADTS) at 44.1 kHz stereo
   (the iPhone case). Other sources/rates need the `M24` codec-capability element
   parsed in `main/bt_av.c`.
+
+### Codec status (important)
+Full **AAC A2DP-sink** stream negotiation only exists on **ESP-IDF `master`**
+(`CONFIG_BT_A2DP_CODEC_AAC_ENABLED`), NOT on v5.5.1. On stable IDF, advertising
+AAC makes the source pick it and the stream open fails
+(`BTA_AV_OPEN_EVT::FAILED status: 3` / `BTA_AV_FAIL_STREAM`, often preceded by
+`BT_AVCT: Out of ccbs`). So `main/bt_av.c` advertises **SBC only** by default;
+`-DMOJO_ENABLE_AAC=1` adds the AAC endpoint and must only be used on a `master`
+toolchain with the AAC config enabled. Both codecs decode via `esp_audio_codec`.

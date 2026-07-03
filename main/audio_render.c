@@ -140,7 +140,12 @@ static void output_pcm(const uint8_t *pcm, size_t bytes, uint8_t channels, uint3
 
 static void render_task(void *arg)
 {
-    ESP_ERROR_CHECK(spdif_out_init(*(int *)arg, DEFAULT_SAMPLE_RATE) != ESP_OK);
+    esp_err_t err = spdif_out_init(*(int *)arg, DEFAULT_SAMPLE_RATE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "S/PDIF init failed: %d", err);
+        vTaskDelete(NULL);
+        return;
+    }
 
     for (;;) {
         size_t item_size = 0;
@@ -198,7 +203,10 @@ void audio_render_start(int spdif_gpio)
         ESP_LOGE(TAG, "alloc failed");
         return;
     }
-    xTaskCreate(render_task, "render", 6144, &gpio_holder, configMAX_PRIORITIES - 3, NULL);
+    /* Pin to the app core so the CPU-bound S/PDIF encoder never starves the
+     * Bluetooth stack (which runs on the pro core). */
+    BaseType_t core = (configNUM_CORES > 1) ? 1 : tskNO_AFFINITY;
+    xTaskCreatePinnedToCore(render_task, "render", 6144, &gpio_holder, 10, NULL, core);
 }
 
 void audio_render_set_codec(audio_codec_t codec, uint32_t sample_rate, uint8_t channels)
