@@ -169,9 +169,14 @@ just need the newer toolchain and two build flags.
    cd pi-bt-mojo
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig \
      -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.aac" \
-     -DMOJO_ENABLE_AAC=1 set-target esp32
+     -DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0 set-target esp32
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig build
    ```
+   `-DMOJO_ENABLE_AVRCP=0` is recommended for AAC: on some ESP-IDF v6 snapshots,
+   initialising AVRCP breaks the A2DP AAC stream open (`BTA_AV_OPEN_EVT::FAILED`,
+   with `AVCT ccb not allocated`). The official `a2dp_sink_stream_aac` example
+   also omits AVRCP. You lose only the volume/metadata *logging* (the Mojo still
+   controls volume). If you want to try AAC *with* AVRCP, drop that flag.
 
 3. Flash:
    ```bash

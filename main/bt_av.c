@@ -30,17 +30,34 @@
 volatile bool g_bt_connected;
 volatile bool g_bt_playing;
 
+/*
+ * AVRCP (volume/metadata) is optional. It works fine with SBC, but on some
+ * ESP-IDF v6 snapshots initialising AVRCP interferes with the A2DP AAC stream
+ * open (BTA_AV_OPEN_EVT::FAILED, with "AVCT ccb not allocated" /
+ * "bta_dm_act no entry for connected service cbs"). The official
+ * a2dp_sink_stream_aac example does not use AVRCP. Build with
+ * -DMOJO_ENABLE_AVRCP=0 to omit it (audio still works; you just lose the
+ * volume/metadata logging).
+ */
+#ifndef MOJO_ENABLE_AVRCP
+#define MOJO_ENABLE_AVRCP 1
+#endif
+
+#if MOJO_ENABLE_AVRCP
 /* map AVRCP 0..127 to 0..100 for logging */
 static inline int param_scale_vol(uint8_t v) { return v * 100 / 127; }
+#endif
 
 /* forward declarations */
 static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param);
 static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param);
 static void bt_app_a2d_audio_data_cb(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_buff_t *audio_buf);
+#if MOJO_ENABLE_AVRCP
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param);
 static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param);
 static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param);
+#endif
 
 /* ---------------------------------------------------------------------------
  * GAP - pairing (Secure Simple Pairing, just-works) + connection status
@@ -161,6 +178,7 @@ static void bt_app_a2d_audio_data_cb(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_
 /* ---------------------------------------------------------------------------
  * AVRCP (controller: metadata/notifications, target: absolute volume)
  * ------------------------------------------------------------------------- */
+#if MOJO_ENABLE_AVRCP
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param)
 {
     switch (event) {
@@ -210,6 +228,7 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
         break;
     }
 }
+#endif /* MOJO_ENABLE_AVRCP */
 
 /* ---------------------------------------------------------------------------
  * Stack-up: register everything and go discoverable
@@ -291,6 +310,7 @@ void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_bt_gap_set_device_name(BT_DEVICE_NAME);
         esp_bt_gap_register_callback(bt_app_gap_cb);
 
+#if MOJO_ENABLE_AVRCP
         /* AVRCP first (coupled to A2DP in Bluedroid) */
         esp_avrc_ct_init();
         esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
@@ -299,6 +319,7 @@ void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_avrc_rn_evt_cap_mask_t evt_set = { 0 };
         esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
         esp_avrc_tg_set_rn_evt_cap(&evt_set);
+#endif
 
         /* A2DP sink (external codec) */
         esp_a2d_register_callback(bt_app_a2d_cb);
