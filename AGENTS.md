@@ -57,6 +57,16 @@ is identical between v5.5.1 and v6, so no source changes are needed for AAC — 
 the newer toolchain + build flags (see README "Building for AAC"). Verified
 building on ESP-IDF v6.2.0.
 
+### AAC currently blocked by an upstream ESP-IDF bug (do not re-chase)
+As of ESP-IDF `v6.1-dev-6126-ge9da155a726`, A2DP **AAC sink fails to open the
+stream** with an iPhone: `BTA_AV_OPEN_EVT::FAILED status: 3` (FAIL_STREAM)
+during AVDTP negotiation, before AUDIO_CFG. This was reproduced with **Espressif's
+own `a2dp_sink_stream_aac` example** (fails identically), so it is NOT our code:
+our config (`CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y`), AAC CIE, and AVRCP-optional
+all match the reference. Conclusion: AAC sink is not usable on this snapshot.
+Use SBC (default, v5.5.1) until a newer/stable ESP-IDF fixes AAC sink; then
+re-test with `-DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0`.
+
 ### Two ESP-IDF versions on one machine (gotcha)
 The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
 source both in one shell — their Python venvs conflict (`export.sh` fails with a
