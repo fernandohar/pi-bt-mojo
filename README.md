@@ -6,9 +6,9 @@ Firmware that turns an **ESP32-WROOM** into a tiny wireless audio bridge: your
 
 This is a microcontroller port of a Raspberry Pi 3B+ prototype
 (`BlueZ → PipeWire → USB Audio host → Mojo`). It targets the classic ESP32 to
-pursue **AAC** (the iPhone's higher-quality codec). Note: on stable ESP-IDF the
-bridge currently runs on **SBC** — AAC A2DP-sink negotiation requires ESP-IDF
-`master` (see Status & limitations). aptX/LDAC don't apply (the iPhone never uses them).
+pursue **AAC** (the iPhone's higher-quality codec). Build on **ESP-IDF v6+**,
+which supports both **AAC** and **SBC** A2DP-sink negotiation (both verified
+working on hardware). aptX/LDAC don't apply (the iPhone never uses them).
 
 ```
  iPhone ──A2DP/AAC──▶ ESP32 Bluedroid A2DP sink (external codec)
@@ -51,49 +51,55 @@ Full from-scratch setup on a MacBook (M1/M2, macOS with Python ≥ 3.9).
 brew install cmake ninja dfu-util python3 git
 ```
 
-### 2. Install ESP-IDF (pick ONE)
+### 2. Install ESP-IDF v6 (pick ONE)
+
+AAC A2DP-sink support requires **ESP-IDF v6+**, so v6 is the recommended version
+(it does SBC too). Verified on **ESP-IDF v6.2.0**.
 
 **Option A - VS Code (recommended, GUI):**
 1. Install [VS Code](https://code.visualstudio.com/) (Apple Silicon build).
 2. Install the **"Espressif IDF"** extension from the Marketplace.
-3. Run command palette → **"ESP-IDF: Configure ESP-IDF Extension"** → *Express* → choose **v5.5.x** and target **esp32**. It downloads the toolchain for you.
+3. Run command palette → **"ESP-IDF: Configure ESP-IDF Extension"** → *Express* → choose **v6.x** (or `master`) and target **esp32**. It downloads the toolchain for you.
 
 **Option B - Command line:**
 
 ```bash
 mkdir -p ~/esp && cd ~/esp
-git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
-cd ~/esp/esp-idf && ./install.sh esp32
+git clone -b release/v6.0 --recursive https://github.com/espressif/esp-idf.git esp-idf-v6
+cd ~/esp/esp-idf-v6 && ./install.sh esp32
 ```
 
 Then source it **per terminal** when you want to build:
 
 ```bash
-. ~/esp/esp-idf/export.sh
+. ~/esp/esp-idf-v6/export.sh
 ```
 
-Prefer an alias over auto-sourcing in `~/.zshrc`. Auto-sourcing one IDF in every
-shell makes it impossible to use a second version (e.g. v6 for AAC) in the same
-terminal. Recommended:
+Prefer an alias over auto-sourcing in `~/.zshrc` (auto-sourcing in every shell
+makes it hard to keep more than one IDF around):
 
 ```bash
 # in ~/.zshrc
-alias idf5='. $HOME/esp/esp-idf/export.sh'      # v5.5.x (SBC, default)
-alias idf6='. $HOME/esp/esp-idf-v6/export.sh'   # v6 (AAC)
+alias idf6='. $HOME/esp/esp-idf-v6/export.sh'   # v6 (AAC + SBC) - recommended
 ```
 
-Then run `idf5` (or `idf6`) once in each new terminal. Never source both in one
-shell — their Python environments conflict.
+Then run `idf6` once in each new terminal. If you also keep an older IDF (e.g.
+v5.5.x, SBC-only) around, never source two versions in one shell — their Python
+environments conflict.
 
 ### 3. Get the source and build
 
 ```bash
 git clone https://github.com/fernandohar/pi-bt-mojo.git
 cd pi-bt-mojo
-. ~/esp/esp-idf/export.sh          # if not auto-loaded (VS Code does this for you)
+. ~/esp/esp-idf-v6/export.sh       # if not auto-loaded (VS Code does this for you)
 idf.py set-target esp32
 idf.py build
 ```
+
+This builds the default **SBC** firmware. To also offer **AAC** to the iPhone,
+see [Building for AAC](#building-for-aac-esp-idf-v6) (same v6 toolchain, two extra
+build flags).
 
 ### 4. USB driver + connect the ESP32
 
@@ -120,18 +126,19 @@ pair the iPhone with **"Mojo BT Bridge"**, and play.
 
 ## Prerequisites
 
-- **ESP-IDF v5.5.x** (installed to `~/esp/esp-idf` by the setup/update script)
-  with the esp32 toolchain. Source it once per shell:
+- **ESP-IDF v6+** (installed to `~/esp/esp-idf-v6`) with the esp32 toolchain.
+  Source it once per shell:
   ```bash
-  . ~/esp/esp-idf/export.sh
+  . ~/esp/esp-idf-v6/export.sh
   ```
+  (v5.5.x also builds, but SBC-only — AAC needs v6+.)
 - The **`espressif/esp_audio_codec`** managed component (fetched automatically by
   the IDF component manager on first `reconfigure`/`build`).
 
 ## Build
 
 ```bash
-. ~/esp/esp-idf/export.sh          # once per shell
+. ~/esp/esp-idf-v6/export.sh       # once per shell
 idf.py set-target esp32            # once (generates sdkconfig from defaults)
 idf.py build                       # -> build/mojo_bt_bridge.bin
 ```
@@ -148,45 +155,32 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ## Building for AAC (ESP-IDF v6+)
 
-AAC gives better quality than SBC from the iPhone, but A2DP AAC-*sink* support
-only exists on **ESP-IDF v6 / `master`** (not v5.5.x). Verified building on
-**ESP-IDF v6.2.0**. The AAC decode path and endpoint are already in the code; you
-just need the newer toolchain and two build flags.
+AAC gives better quality than SBC from the iPhone. On **ESP-IDF v6+** (which you
+already installed above) it's just two extra build flags — the AAC decode path and
+endpoint are already in the code. Verified on **ESP-IDF v6.2.0**.
 
-> Status (2026-07): Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6
-> (for **both** SBC and AAC) turned out to be an **app-side init-order bug**, not
-> an upstream defect: the external-codec stream endpoints must be registered
-> *after* `esp_a2d_sink_init()` finishes (from the `ESP_A2D_PROF_STATE_EVT`
-> init-success event), because registering them synchronously right after the
-> asynchronous init call silently fails (`ESP_ERR_INVALID_STATE`), leaving the
-> sink with an empty codec table. This is now fixed in `main/bt_av.c`.
+> Note: Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6 (for **both**
+> SBC and AAC) were an **app-side init-order bug**, not an upstream defect: the
+> external-codec stream endpoints must be registered *after* `esp_a2d_sink_init()`
+> finishes (from the `ESP_A2D_PROF_STATE_EVT` init-success event); registering
+> them synchronously right after the asynchronous init call silently fails
+> (`ESP_ERR_INVALID_STATE`), leaving the sink with an empty codec table. Fixed in
+> `main/bt_av.c`.
 
-1. Install ESP-IDF v6 (master) alongside your existing IDF:
-   ```bash
-   mkdir -p ~/esp && cd ~/esp
-   git clone -b master --recursive https://github.com/espressif/esp-idf.git esp-idf-v6
-   cd ~/esp/esp-idf-v6 && ./install.sh esp32
-   ```
-   Tip: use a **fresh terminal** for the v6 build — don't source two IDF versions
-   in the same shell (their Python envs conflict).
-
-2. Build with AAC enabled (separate build dir + sdkconfig so it never clashes with
-   the SBC build):
+1. Build with AAC enabled (separate build dir + sdkconfig so it never clashes with
+   the plain SBC build):
    ```bash
    . ~/esp/esp-idf-v6/export.sh
    cd pi-bt-mojo
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig \
      -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.aac" \
-     -DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0 set-target esp32
+     -DMOJO_ENABLE_AAC=1 set-target esp32
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig build
    ```
-   `-DMOJO_ENABLE_AVRCP=0` is optional. Earlier `AVCT ccb not allocated` /
-   `BTA_AV_OPEN_EVT::FAILED` errors that looked AVRCP-related were actually the
-   endpoint-registration bug described above (fixed), so AVRCP should now be
-   fine. Dropping AVRCP only removes volume/metadata *logging* (the Mojo still
-   controls volume); leave it out if you want the smallest, simplest build.
+   AVRCP (volume/metadata logging) stays enabled by default and works with AAC.
+   Add `-DMOJO_ENABLE_AVRCP=0` if you want the smallest build without it.
 
-3. Flash:
+2. Flash:
    ```bash
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig -p /dev/cu.YOURPORT flash monitor
    ```
@@ -194,11 +188,12 @@ just need the newer toolchain and two build flags.
 The iPhone will then negotiate AAC. Confirm in the log:
 ```
 bt_av: registered AAC endpoint ...
+bt_av: SEP register success, seid 0
 bt_av: codec configured: AAC ...
 render: opened AAC decoder (44100 Hz, 2 ch)
 ```
 Everything downstream (drift buffer, S/PDIF, Mojo) is identical to the SBC path.
-To go back to SBC, just build normally (v5.5.x, no AAC flags).
+To go back to SBC, just build normally (no AAC flags).
 
 ## Use / verify (requires hardware)
 
@@ -245,12 +240,11 @@ To go back to SBC, just build normally (v5.5.x, no AAC flags).
 
 ## Status & limitations
 
-- **Codec:** **SBC by default** (works on every ESP-IDF release). Full **AAC**
-  A2DP-*sink* stream negotiation requires **ESP-IDF v6+** (gated by
-  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); on v5.5.x advertising AAC makes the iPhone
-  select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`). So the
-  firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a v6+
-  toolchain (see [Building for AAC](#building-for-aac-esp-idf-v6)). Both codecs
+- **Codec:** builds on **ESP-IDF v6+**. **SBC by default**; add
+  `-DMOJO_ENABLE_AAC=1` (+ the `sdkconfig.defaults.aac` overlay) to also offer
+  **AAC**, which the iPhone prefers (see [Building for AAC](#building-for-aac-esp-idf-v6)).
+  Full AAC A2DP-*sink* negotiation is gated by `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`
+  (v6+ only); on older v5.5.x the firmware still builds SBC-only. Both codecs
   decode via `esp_audio_codec`. aptX/LDAC are out of scope (iPhone never uses them).
 - **S/PDIF is software-generated** (see recommendation in [docs/wiring.md](docs/wiring.md)).
   The BMC bit/word ordering of the ESP32 I2S peripheral should be confirmed on a

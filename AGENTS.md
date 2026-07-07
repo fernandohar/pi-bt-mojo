@@ -52,10 +52,11 @@ AAC makes the source pick it and the stream open fails
 (`BTA_AV_OPEN_EVT::FAILED status: 3` / `BTA_AV_FAIL_STREAM`, often preceded by
 `BT_AVCT: Out of ccbs`). So `main/bt_av.c` advertises **SBC only** by default;
 `-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac` adds the AAC endpoint on a v6+
-toolchain. Both codecs decode via `esp_audio_codec`. The A2DP external-codec API
-is identical between v5.5.1 and v6, so no source changes are needed for AAC — only
-the newer toolchain + build flags (see README "Building for AAC"). Verified
-building on ESP-IDF v6.2.0.
+toolchain. Both codecs decode via `esp_audio_codec`. **ESP-IDF v6+ is the recommended
+toolchain** — it builds both SBC and AAC, and both are **verified working on
+hardware** (iPhone + Mojo) on v6. v5.5.x still builds, but SBC-only. No source
+changes are needed for AAC, only the v6 toolchain + build flags (README
+"Building for AAC").
 
 ### v6 A2DP sink: register endpoints AFTER init (RESOLVED - was NOT an upstream bug)
 Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6 (for BOTH SBC and AAC,
@@ -78,8 +79,10 @@ non-fatal noise (also fires at boot) - do not chase it. With the fix, AAC on v6
 (`-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac`) should negotiate normally.
 
 ### Two ESP-IDF versions on one machine (gotcha)
-The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
-source both in one shell — their Python venvs conflict (`export.sh` fails with a
+**v6 is the recommended toolchain (builds SBC and AAC).** On this VM v6 lives at
+`~/esp/esp-idf-v6` (`. ~/esp/esp-idf-v6/export.sh`); an older v5.5.1 (SBC-only)
+remains at `~/esp/esp-idf` and is what `~/.bashrc` auto-sources. Do NOT source two
+IDF versions in one shell — their Python venvs conflict (`export.sh` fails with a
 venv-mismatch error). Use a fresh shell per version, or unset
-`IDF_PATH`/`IDF_PYTHON_ENV_PATH` before sourcing the other. Keep the two builds in
-separate dirs with separate sdkconfigs (`-B build-aac -DSDKCONFIG=build-aac/sdkconfig`).
+`IDF_PATH`/`IDF_PYTHON_ENV_PATH` before sourcing the other. Keep separate build
+dirs + sdkconfigs (`-B build-aac -DSDKCONFIG=build-aac/sdkconfig`).
