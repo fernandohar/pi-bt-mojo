@@ -153,11 +153,13 @@ only exists on **ESP-IDF v6 / `master`** (not v5.5.x). Verified building on
 **ESP-IDF v6.2.0**. The AAC decode path and endpoint are already in the code; you
 just need the newer toolchain and two build flags.
 
-> Status (2026-07): AAC sink is currently **broken upstream** — on ESP-IDF
-> `v6.1-dev-6126` the AAC stream fails to open on hardware, and Espressif's own
-> `a2dp_sink_stream_aac` example reproduces it. Tracking:
-> https://github.com/espressif/esp-idf/issues/18786 . Use SBC until it's fixed;
-> the recipe below is correct and ready for a fixed ESP-IDF.
+> Status (2026-07): Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6
+> (for **both** SBC and AAC) turned out to be an **app-side init-order bug**, not
+> an upstream defect: the external-codec stream endpoints must be registered
+> *after* `esp_a2d_sink_init()` finishes (from the `ESP_A2D_PROF_STATE_EVT`
+> init-success event), because registering them synchronously right after the
+> asynchronous init call silently fails (`ESP_ERR_INVALID_STATE`), leaving the
+> sink with an empty codec table. This is now fixed in `main/bt_av.c`.
 
 1. Install ESP-IDF v6 (master) alongside your existing IDF:
    ```bash
@@ -178,11 +180,11 @@ just need the newer toolchain and two build flags.
      -DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0 set-target esp32
    idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig build
    ```
-   `-DMOJO_ENABLE_AVRCP=0` is recommended for AAC: on some ESP-IDF v6 snapshots,
-   initialising AVRCP breaks the A2DP AAC stream open (`BTA_AV_OPEN_EVT::FAILED`,
-   with `AVCT ccb not allocated`). The official `a2dp_sink_stream_aac` example
-   also omits AVRCP. You lose only the volume/metadata *logging* (the Mojo still
-   controls volume). If you want to try AAC *with* AVRCP, drop that flag.
+   `-DMOJO_ENABLE_AVRCP=0` is optional. Earlier `AVCT ccb not allocated` /
+   `BTA_AV_OPEN_EVT::FAILED` errors that looked AVRCP-related were actually the
+   endpoint-registration bug described above (fixed), so AVRCP should now be
+   fine. Dropping AVRCP only removes volume/metadata *logging* (the Mojo still
+   controls volume); leave it out if you want the smallest, simplest build.
 
 3. Flash:
    ```bash
@@ -233,15 +235,18 @@ To go back to SBC, just build normally (v5.5.x, no AAC flags).
 - **Mojo won't lock to S/PDIF:** rebuild with `idf.py build -DSPDIF_SWAP_WORDS=1`
   (ESP32 32-bit I2S half-word-swap quirk); check the coax attenuator / TOSLINK wiring.
 - **iPhone connects then drops** with `BTA_AV_OPEN_EVT::FAILED status: 3`
-  (`BTA_AV_FAIL_STREAM`), often with `BT_AVCT: Out of ccbs`: the phone selected a
-  codec the stack can't open. On stable IDF this happens if AAC is advertised —
-  the firmware defaults to **SBC only** to avoid it. If you enabled
-  `MOJO_ENABLE_AAC` without being on ESP-IDF `master`, rebuild without it.
+  (`BTA_AV_FAIL_STREAM`), with `Can't parse src cap` / `bta_av_open_failed` in the
+  trace: the sink advertised **no codec endpoint**. This was an init-order bug —
+  endpoints are now registered from the `ESP_A2D_PROF_STATE_EVT` init-success
+  handler (fixed in `bt_av.c`). If you see a `SEP register FAILED` log, the
+  endpoints didn't register; make sure you're running a build that includes this
+  fix. (Advertising AAC on an IDF without `CONFIG_BT_A2DP_CODEC_AAC_ENABLED` is a
+  separate cause — the firmware defaults to SBC only to avoid it.)
 
 ## Status & limitations
 
-- **Codec:** **SBC by default** on stable ESP-IDF (v5.5.1). Full **AAC**
-  A2DP-*sink* stream negotiation requires **ESP-IDF v6+ / `master`** (gated by
+- **Codec:** **SBC by default** (works on every ESP-IDF release). Full **AAC**
+  A2DP-*sink* stream negotiation requires **ESP-IDF v6+** (gated by
   `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); on v5.5.x advertising AAC makes the iPhone
   select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`). So the
   firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a v6+

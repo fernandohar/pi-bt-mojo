@@ -57,32 +57,25 @@ is identical between v5.5.1 and v6, so no source changes are needed for AAC — 
 the newer toolchain + build flags (see README "Building for AAC"). Verified
 building on ESP-IDF v6.2.0.
 
-### AAC currently blocked by an upstream ESP-IDF bug (do not re-chase)
-As of ESP-IDF `v6.1-dev-6126-ge9da155a726`, the **external-codec A2DP sink is
-broken with an iPhone for ALL codecs** (not just AAC): the stream fails to open,
-`BTA_AV_OPEN_EVT::FAILED status: 3` (FAIL_STREAM) during AVDTP negotiation,
-before AUDIO_CFG. Reproduced three ways on the same ESP32-WROOM + iPhone:
-  1. our firmware, AAC endpoint;
-  2. Espressif's own `a2dp_sink_stream_aac` example (fails identically);
-  3. our firmware, **SBC-only** endpoint (also fails).
-The identical SBC firmware **works on v5.5.1**, so this is a v6 regression in the
-external-codec sink, not our code. Conclusion: use v5.5.1 (SBC) until fixed; v6
-external-codec sink (SBC or AAC) is unusable on this snapshot.
+### v6 A2DP sink: register endpoints AFTER init (RESOLVED - was NOT an upstream bug)
+Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6 (for BOTH SBC and AAC,
+also reproduced with Espressif's `a2dp_sink_stream_aac` example) were an
+**app-side init-order race**, not a stack regression. `esp_a2d_sink_init()` is
+asynchronous; the stack's `g_a2dp_on_deinit` flag stays `true` and the A2DP state
+machine is not yet `IDLE` until the queued init message is processed. Calling
+`esp_a2d_sink_register_stream_endpoint()` synchronously right after init makes it
+return `ESP_ERR_INVALID_STATE` and **never enqueue** the registration, so no codec
+endpoint is ever created. `bta_av_co_audio_peer_src_supports_codec()` then finds an
+empty `codec_caps` table (`id=0xff`) and returns FALSE -> `bta_av_open_failed`.
 
-Root cause (from a full DEBUG trace, BT log level DEBUG): the fatal step is
-`bta_av_co_audio_peer_src_supports_codec()` returning FALSE -> `bta_av_open_failed`
--> BTA_AV_OPEN_EVT status 3. i.e. v6's external-codec sink fails to MATCH the
-iPhone's SBC source SEP against our registered SBC endpoint
-(`p_peer->srcs[i].codec_type == codec_cfg.id` + `bta_av_sbc_cfg_matches_cap`).
-NOTE: the `Can't parse src cap ret = 13` (A2D_WRONG_CODEC) line is NON-fatal
-noise (it also fires at boot; build_src_cfg still leaves a default config) - do
-not chase it. Stack regression in the v6 external-codec capability matching, not
-app-fixable. To capture the trace: set the relevant BT_LOG_*_TRACE_LEVEL to DEBUG
-AND raise CONFIG_LOG_DEFAULT_LEVEL/MAXIMUM_LEVEL to DEBUG (bluedroid *_TRACE_DEBUG
-map to ESP_LOG_DEBUG, so the global log level gates them).
-Use SBC (default, v5.5.1) until a newer/stable ESP-IDF fixes AAC sink; then
-re-test with `-DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0`.
-Upstream tracking issue: https://github.com/espressif/esp-idf/issues/18786
+Fix (in `main/bt_av.c`): register the stream endpoints + audio-data callback from
+the `ESP_A2D_PROF_STATE_EVT` init-success handler, not at stack-up. A `SEP register
+FAILED` log means registration was rejected (still too early). The stock examples
+happen to win this race; our AVRCP init + Core-1 render task made us lose it.
+
+The `Can't parse src cap ret = 13` (A2D_WRONG_CODEC) trace line is unrelated
+non-fatal noise (also fires at boot) - do not chase it. With the fix, AAC on v6
+(`-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac`) should negotiate normally.
 
 ### Two ESP-IDF versions on one machine (gotcha)
 The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
