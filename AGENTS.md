@@ -69,15 +69,17 @@ The identical SBC firmware **works on v5.5.1**, so this is a v6 regression in th
 external-codec sink, not our code. Conclusion: use v5.5.1 (SBC) until fixed; v6
 external-codec sink (SBC or AAC) is unusable on this snapshot.
 
-Root cause (from a full DEBUG trace, BT log level DEBUG): on connect the sink
-receives the peer SBC caps, then `bta_av_build_src_cfg()` -> `A2D_ParsSbcInfo()`
-returns **A2D_WRONG_CODEC (0x0D=13)** ("Can't parse src cap ret = 13"), so no
-codec config is built and `bta_av_open_failed` fires -> BTA_AV_OPEN_EVT status 3.
-i.e. the v6 external-codec sink mis-parses the source's SBC capability. Stack bug,
-not fixable in app code. To capture this trace: set BT log level + the relevant
-BT_LOG_*_TRACE_LEVEL to DEBUG AND raise CONFIG_LOG_DEFAULT_LEVEL/MAXIMUM_LEVEL to
-DEBUG (bluedroid *_TRACE_DEBUG map to ESP_LOG_DEBUG, so the global log level
-gates them).
+Root cause (from a full DEBUG trace, BT log level DEBUG): the fatal step is
+`bta_av_co_audio_peer_src_supports_codec()` returning FALSE -> `bta_av_open_failed`
+-> BTA_AV_OPEN_EVT status 3. i.e. v6's external-codec sink fails to MATCH the
+iPhone's SBC source SEP against our registered SBC endpoint
+(`p_peer->srcs[i].codec_type == codec_cfg.id` + `bta_av_sbc_cfg_matches_cap`).
+NOTE: the `Can't parse src cap ret = 13` (A2D_WRONG_CODEC) line is NON-fatal
+noise (it also fires at boot; build_src_cfg still leaves a default config) - do
+not chase it. Stack regression in the v6 external-codec capability matching, not
+app-fixable. To capture the trace: set the relevant BT_LOG_*_TRACE_LEVEL to DEBUG
+AND raise CONFIG_LOG_DEFAULT_LEVEL/MAXIMUM_LEVEL to DEBUG (bluedroid *_TRACE_DEBUG
+map to ESP_LOG_DEBUG, so the global log level gates them).
 Use SBC (default, v5.5.1) until a newer/stable ESP-IDF fixes AAC sink; then
 re-test with `-DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0`.
 Upstream tracking issue: https://github.com/espressif/esp-idf/issues/18786
