@@ -296,7 +296,12 @@ static void register_stream_endpoints(void)
     sbc.cie.sbc_info.block_len = 0xf;
     sbc.cie.sbc_info.num_subbands = 0x3;
     sbc.cie.sbc_info.alloc_mthd = 0x3;
-    sbc.cie.sbc_info.max_bitpool = 53;
+    /* Advertise the full SBC bitpool range (max 250). ESP-IDF v6's external-codec
+     * sink rejects the source if our advertised max_bitpool is below the source's
+     * (bta_av_sbc_cfg_matches_cap: `peer.max_bitpool > our.max_bitpool` -> no match
+     * -> BTA_AV_OPEN_EVT::FAILED). The iPhone advertises max_bitpool=250, so 53 was
+     * too low. 250 matches the ESP-IDF a2dp_sink_stream_aac reference. */
+    sbc.cie.sbc_info.max_bitpool = 250;
     sbc.cie.sbc_info.min_bitpool = 2;
     esp_a2d_sink_register_stream_endpoint(seid++, &sbc);
     ESP_LOGI(BT_AV_TAG, "registered SBC endpoint");
