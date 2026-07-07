@@ -58,12 +58,16 @@ the newer toolchain + build flags (see README "Building for AAC"). Verified
 building on ESP-IDF v6.2.0.
 
 ### AAC currently blocked by an upstream ESP-IDF bug (do not re-chase)
-As of ESP-IDF `v6.1-dev-6126-ge9da155a726`, A2DP **AAC sink fails to open the
-stream** with an iPhone: `BTA_AV_OPEN_EVT::FAILED status: 3` (FAIL_STREAM)
-during AVDTP negotiation, before AUDIO_CFG. This was reproduced with **Espressif's
-own `a2dp_sink_stream_aac` example** (fails identically), so it is NOT our code:
-our config (`CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y`), AAC CIE, and AVRCP-optional
-all match the reference. Conclusion: AAC sink is not usable on this snapshot.
+As of ESP-IDF `v6.1-dev-6126-ge9da155a726`, the **external-codec A2DP sink is
+broken with an iPhone for ALL codecs** (not just AAC): the stream fails to open,
+`BTA_AV_OPEN_EVT::FAILED status: 3` (FAIL_STREAM) during AVDTP negotiation,
+before AUDIO_CFG. Reproduced three ways on the same ESP32-WROOM + iPhone:
+  1. our firmware, AAC endpoint;
+  2. Espressif's own `a2dp_sink_stream_aac` example (fails identically);
+  3. our firmware, **SBC-only** endpoint (also fails).
+The identical SBC firmware **works on v5.5.1**, so this is a v6 regression in the
+external-codec sink, not our code. Conclusion: use v5.5.1 (SBC) until fixed; v6
+external-codec sink (SBC or AAC) is unusable on this snapshot.
 Use SBC (default, v5.5.1) until a newer/stable ESP-IDF fixes AAC sink; then
 re-test with `-DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0`.
 Upstream tracking issue: https://github.com/espressif/esp-idf/issues/18786
