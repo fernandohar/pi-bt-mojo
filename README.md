@@ -64,8 +64,26 @@ brew install cmake ninja dfu-util python3 git
 mkdir -p ~/esp && cd ~/esp
 git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
 cd ~/esp/esp-idf && ./install.sh esp32
-echo '. $HOME/esp/esp-idf/export.sh >/dev/null 2>&1' >> ~/.zshrc   # auto-load in new terminals
 ```
+
+Then source it **per terminal** when you want to build:
+
+```bash
+. ~/esp/esp-idf/export.sh
+```
+
+Prefer an alias over auto-sourcing in `~/.zshrc`. Auto-sourcing one IDF in every
+shell makes it impossible to use a second version (e.g. v6 for AAC) in the same
+terminal. Recommended:
+
+```bash
+# in ~/.zshrc
+alias idf5='. $HOME/esp/esp-idf/export.sh'      # v5.5.x (SBC, default)
+alias idf6='. $HOME/esp/esp-idf-v6/export.sh'   # v6 (AAC)
+```
+
+Then run `idf5` (or `idf6`) once in each new terminal. Never source both in one
+shell — their Python environments conflict.
 
 ### 3. Get the source and build
 
@@ -128,6 +146,60 @@ and headers): `SPDIF_GPIO` (default **27**), `STATUS_LED_GPIO` (default **2**),
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+## Building for AAC (ESP-IDF v6+)
+
+AAC gives better quality than SBC from the iPhone, but A2DP AAC-*sink* support
+only exists on **ESP-IDF v6 / `master`** (not v5.5.x). Verified building on
+**ESP-IDF v6.2.0**. The AAC decode path and endpoint are already in the code; you
+just need the newer toolchain and two build flags.
+
+> Status (2026-07): Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6
+> (for **both** SBC and AAC) turned out to be an **app-side init-order bug**, not
+> an upstream defect: the external-codec stream endpoints must be registered
+> *after* `esp_a2d_sink_init()` finishes (from the `ESP_A2D_PROF_STATE_EVT`
+> init-success event), because registering them synchronously right after the
+> asynchronous init call silently fails (`ESP_ERR_INVALID_STATE`), leaving the
+> sink with an empty codec table. This is now fixed in `main/bt_av.c`.
+
+1. Install ESP-IDF v6 (master) alongside your existing IDF:
+   ```bash
+   mkdir -p ~/esp && cd ~/esp
+   git clone -b master --recursive https://github.com/espressif/esp-idf.git esp-idf-v6
+   cd ~/esp/esp-idf-v6 && ./install.sh esp32
+   ```
+   Tip: use a **fresh terminal** for the v6 build — don't source two IDF versions
+   in the same shell (their Python envs conflict).
+
+2. Build with AAC enabled (separate build dir + sdkconfig so it never clashes with
+   the SBC build):
+   ```bash
+   . ~/esp/esp-idf-v6/export.sh
+   cd pi-bt-mojo
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig \
+     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.aac" \
+     -DMOJO_ENABLE_AAC=1 -DMOJO_ENABLE_AVRCP=0 set-target esp32
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig build
+   ```
+   `-DMOJO_ENABLE_AVRCP=0` is optional. Earlier `AVCT ccb not allocated` /
+   `BTA_AV_OPEN_EVT::FAILED` errors that looked AVRCP-related were actually the
+   endpoint-registration bug described above (fixed), so AVRCP should now be
+   fine. Dropping AVRCP only removes volume/metadata *logging* (the Mojo still
+   controls volume); leave it out if you want the smallest, simplest build.
+
+3. Flash:
+   ```bash
+   idf.py -B build-aac -DSDKCONFIG=build-aac/sdkconfig -p /dev/cu.YOURPORT flash monitor
+   ```
+
+The iPhone will then negotiate AAC. Confirm in the log:
+```
+bt_av: registered AAC endpoint ...
+bt_av: codec configured: AAC ...
+render: opened AAC decoder (44100 Hz, 2 ch)
+```
+Everything downstream (drift buffer, S/PDIF, Mojo) is identical to the SBC path.
+To go back to SBC, just build normally (v5.5.x, no AAC flags).
+
 ## Use / verify (requires hardware)
 
 1. Wire the S/PDIF output on **GPIO27** to the Mojo's optical or coax input
@@ -163,20 +235,23 @@ idf.py -p /dev/ttyUSB0 flash monitor
 - **Mojo won't lock to S/PDIF:** rebuild with `idf.py build -DSPDIF_SWAP_WORDS=1`
   (ESP32 32-bit I2S half-word-swap quirk); check the coax attenuator / TOSLINK wiring.
 - **iPhone connects then drops** with `BTA_AV_OPEN_EVT::FAILED status: 3`
-  (`BTA_AV_FAIL_STREAM`), often with `BT_AVCT: Out of ccbs`: the phone selected a
-  codec the stack can't open. On stable IDF this happens if AAC is advertised —
-  the firmware defaults to **SBC only** to avoid it. If you enabled
-  `MOJO_ENABLE_AAC` without being on ESP-IDF `master`, rebuild without it.
+  (`BTA_AV_FAIL_STREAM`), with `Can't parse src cap` / `bta_av_open_failed` in the
+  trace: the sink advertised **no codec endpoint**. This was an init-order bug —
+  endpoints are now registered from the `ESP_A2D_PROF_STATE_EVT` init-success
+  handler (fixed in `bt_av.c`). If you see a `SEP register FAILED` log, the
+  endpoints didn't register; make sure you're running a build that includes this
+  fix. (Advertising AAC on an IDF without `CONFIG_BT_A2DP_CODEC_AAC_ENABLED` is a
+  separate cause — the firmware defaults to SBC only to avoid it.)
 
 ## Status & limitations
 
-- **Codec:** **SBC by default** on stable ESP-IDF (v5.5.1). Full **AAC**
-  A2DP-*sink* stream negotiation only exists on **ESP-IDF `master`** (gated by
-  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); advertising AAC on a stable release makes
-  the iPhone select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`).
-  So the firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a
-  suitable `master` toolchain. Both codecs are decoded by `esp_audio_codec`.
-  aptX/LDAC are out of scope (iPhone never uses them).
+- **Codec:** **SBC by default** (works on every ESP-IDF release). Full **AAC**
+  A2DP-*sink* stream negotiation requires **ESP-IDF v6+** (gated by
+  `CONFIG_BT_A2DP_CODEC_AAC_ENABLED`); on v5.5.x advertising AAC makes the iPhone
+  select it and the stream open then fails (`BTA_AV_OPEN_EVT::FAILED`). So the
+  firmware advertises SBC only unless built with `-DMOJO_ENABLE_AAC=1` on a v6+
+  toolchain (see [Building for AAC](#building-for-aac-esp-idf-v6)). Both codecs
+  decode via `esp_audio_codec`. aptX/LDAC are out of scope (iPhone never uses them).
 - **S/PDIF is software-generated** (see recommendation in [docs/wiring.md](docs/wiring.md)).
   The BMC bit/word ordering of the ESP32 I2S peripheral should be confirmed on a
   scope/DAC; a `SPDIF_SWAP_WORDS` compile switch is provided for the known

@@ -46,10 +46,40 @@ Mojo audio bridge (A2DP AAC in, software S/PDIF out). It cross-compiles to a
   parsed in `main/bt_av.c`.
 
 ### Codec status (important)
-Full **AAC A2DP-sink** stream negotiation only exists on **ESP-IDF `master`**
+Full **AAC A2DP-sink** stream negotiation only exists on **ESP-IDF v6 / `master`**
 (`CONFIG_BT_A2DP_CODEC_AAC_ENABLED`), NOT on v5.5.1. On stable IDF, advertising
 AAC makes the source pick it and the stream open fails
 (`BTA_AV_OPEN_EVT::FAILED status: 3` / `BTA_AV_FAIL_STREAM`, often preceded by
 `BT_AVCT: Out of ccbs`). So `main/bt_av.c` advertises **SBC only** by default;
-`-DMOJO_ENABLE_AAC=1` adds the AAC endpoint and must only be used on a `master`
-toolchain with the AAC config enabled. Both codecs decode via `esp_audio_codec`.
+`-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac` adds the AAC endpoint on a v6+
+toolchain. Both codecs decode via `esp_audio_codec`. The A2DP external-codec API
+is identical between v5.5.1 and v6, so no source changes are needed for AAC — only
+the newer toolchain + build flags (see README "Building for AAC"). Verified
+building on ESP-IDF v6.2.0.
+
+### v6 A2DP sink: register endpoints AFTER init (RESOLVED - was NOT an upstream bug)
+Earlier `BTA_AV_OPEN_EVT::FAILED status: 3` failures on v6 (for BOTH SBC and AAC,
+also reproduced with Espressif's `a2dp_sink_stream_aac` example) were an
+**app-side init-order race**, not a stack regression. `esp_a2d_sink_init()` is
+asynchronous; the stack's `g_a2dp_on_deinit` flag stays `true` and the A2DP state
+machine is not yet `IDLE` until the queued init message is processed. Calling
+`esp_a2d_sink_register_stream_endpoint()` synchronously right after init makes it
+return `ESP_ERR_INVALID_STATE` and **never enqueue** the registration, so no codec
+endpoint is ever created. `bta_av_co_audio_peer_src_supports_codec()` then finds an
+empty `codec_caps` table (`id=0xff`) and returns FALSE -> `bta_av_open_failed`.
+
+Fix (in `main/bt_av.c`): register the stream endpoints + audio-data callback from
+the `ESP_A2D_PROF_STATE_EVT` init-success handler, not at stack-up. A `SEP register
+FAILED` log means registration was rejected (still too early). The stock examples
+happen to win this race; our AVRCP init + Core-1 render task made us lose it.
+
+The `Can't parse src cap ret = 13` (A2D_WRONG_CODEC) trace line is unrelated
+non-fatal noise (also fires at boot) - do not chase it. With the fix, AAC on v6
+(`-DMOJO_ENABLE_AAC=1` + `sdkconfig.defaults.aac`) should negotiate normally.
+
+### Two ESP-IDF versions on one machine (gotcha)
+The SBC (default) build uses ESP-IDF **v5.5.1**; the AAC build uses **v6**. Do NOT
+source both in one shell — their Python venvs conflict (`export.sh` fails with a
+venv-mismatch error). Use a fresh shell per version, or unset
+`IDF_PATH`/`IDF_PYTHON_ENV_PATH` before sourcing the other. Keep the two builds in
+separate dirs with separate sdkconfigs (`-B build-aac -DSDKCONFIG=build-aac/sdkconfig`).

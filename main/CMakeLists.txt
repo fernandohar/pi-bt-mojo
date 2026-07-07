@@ -27,3 +27,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE BT_DEVICE_NAME=\"${BT_DEVICE
 if(MOJO_ENABLE_AAC)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE MOJO_ENABLE_AAC=1)
 endif()
+
+# AVRCP (volume/metadata) is on by default. Some ESP-IDF v6 snapshots need it
+# OFF for the A2DP AAC stream to open; build with -DMOJO_ENABLE_AVRCP=0 then.
+if(DEFINED MOJO_ENABLE_AVRCP)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MOJO_ENABLE_AVRCP=${MOJO_ENABLE_AVRCP})
+endif()

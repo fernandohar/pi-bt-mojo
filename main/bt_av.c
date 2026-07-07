@@ -30,17 +30,35 @@
 volatile bool g_bt_connected;
 volatile bool g_bt_playing;
 
+/*
+ * AVRCP (volume/metadata) is optional. Build with -DMOJO_ENABLE_AVRCP=0 to omit
+ * it (audio still works; you just lose the volume/metadata logging).
+ *
+ * Historical note: earlier "AVCT ccb not allocated" / "bta_dm_act no entry"
+ * failures that seemed AVRCP-related were actually a side effect of the stream
+ * endpoints never being registered (see the A2DP init-order note below), not
+ * AVRCP itself.
+ */
+#ifndef MOJO_ENABLE_AVRCP
+#define MOJO_ENABLE_AVRCP 1
+#endif
+
+#if MOJO_ENABLE_AVRCP
 /* map AVRCP 0..127 to 0..100 for logging */
 static inline int param_scale_vol(uint8_t v) { return v * 100 / 127; }
+#endif
 
 /* forward declarations */
 static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param);
 static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param);
 static void bt_app_a2d_audio_data_cb(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_buff_t *audio_buf);
+static void register_stream_endpoints(void);
+#if MOJO_ENABLE_AVRCP
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param);
 static void bt_app_rc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param);
 static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param);
+#endif
 
 /* ---------------------------------------------------------------------------
  * GAP - pairing (Secure Simple Pairing, just-works) + connection status
@@ -143,8 +161,35 @@ static void bt_av_hdl_a2d_evt(uint16_t event, void *p_param)
         break;
     }
 
+    case ESP_A2D_PROF_STATE_EVT:
+        /*
+         * A2DP init is asynchronous. esp_a2d_sink_init() only *queues* the init;
+         * the stack's g_a2dp_on_deinit flag stays true (and the state machine is
+         * not yet in IDLE) until the init message is processed, at which point
+         * this event fires. Registering stream endpoints any earlier makes
+         * esp_a2d_sink_register_stream_endpoint() bail out with
+         * ESP_ERR_INVALID_STATE (the reg_sep message is never enqueued), so no
+         * codec endpoint is ever created and every A2DP connection fails
+         * (bta_av_co_audio_peer_src_supports_codec finds an empty codec_caps
+         * table -> bta_av_open_failed -> BTA_AV_OPEN_EVT::FAILED). Register here
+         * instead, once init has completed.
+         */
+        if (a2d->a2d_prof_stat.init_state == ESP_A2D_INIT_SUCCESS) {
+            ESP_LOGI(BT_AV_TAG, "A2DP init complete; registering stream endpoints");
+            register_stream_endpoints();
+            esp_a2d_sink_register_audio_data_callback(bt_app_a2d_audio_data_cb);
+        } else {
+            ESP_LOGW(BT_AV_TAG, "A2DP deinit complete");
+        }
+        break;
+
     case ESP_A2D_SEP_REG_STATE_EVT:
-        ESP_LOGI(BT_AV_TAG, "SEP register state: seid handled");
+        if (a2d->a2d_sep_reg_stat.reg_state == ESP_A2D_SEP_REG_SUCCESS) {
+            ESP_LOGI(BT_AV_TAG, "SEP register success, seid %d", a2d->a2d_sep_reg_stat.seid);
+        } else {
+            ESP_LOGE(BT_AV_TAG, "SEP register FAILED, seid %d, state %d (endpoint not registered)",
+                     a2d->a2d_sep_reg_stat.seid, a2d->a2d_sep_reg_stat.reg_state);
+        }
         break;
 
     default:
@@ -161,6 +206,7 @@ static void bt_app_a2d_audio_data_cb(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_audio_
 /* ---------------------------------------------------------------------------
  * AVRCP (controller: metadata/notifications, target: absolute volume)
  * ------------------------------------------------------------------------- */
+#if MOJO_ENABLE_AVRCP
 static void bt_app_rc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param)
 {
     switch (event) {
@@ -210,6 +256,7 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
         break;
     }
 }
+#endif /* MOJO_ENABLE_AVRCP */
 
 /* ---------------------------------------------------------------------------
  * Stack-up: register everything and go discoverable
@@ -217,16 +264,27 @@ static void bt_av_hdl_avrc_tg_evt(uint16_t event, void *p_param)
 /*
  * Codec endpoints.
  *
- * IMPORTANT: full AAC A2DP-*sink* stream negotiation only exists on ESP-IDF
- * master (gated by BT_A2DP_CODEC_AAC_ENABLED). On stable releases (e.g. v5.5.1)
- * the external-codec path can pass data but cannot complete the AAC stream open,
- * so if we advertise AAC the iPhone selects it and the stream open fails
- * (BTA_AV_OPEN_EVT::FAILED / BTA_AV_FAIL_STREAM). We therefore advertise
- * SBC only by default; define MOJO_ENABLE_AAC=1 (only on ESP-IDF master with
- * CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y) to also offer AAC.
+ * AAC A2DP-*sink* negotiation is gated by CONFIG_BT_A2DP_CODEC_AAC_ENABLED,
+ * which only exists on ESP-IDF v6+. We advertise SBC only by default (works on
+ * every IDF release); define MOJO_ENABLE_AAC=1 (only on ESP-IDF v6+ with
+ * CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y, via the sdkconfig.defaults.aac overlay)
+ * to also offer AAC to the iPhone.
+ *
+ * NB: endpoints are registered from the ESP_A2D_PROF_STATE_EVT handler, not
+ * synchronously at stack-up (see bt_av_hdl_a2d_evt) - registering before the
+ * async A2DP init completes silently fails and leaves the sink with no codec.
  */
 #ifndef MOJO_ENABLE_AAC
 #define MOJO_ENABLE_AAC 0
+#endif
+
+/*
+ * Registering an AAC endpoint is only useful if the Bluedroid stack was built
+ * with AAC negotiation support. Fail loudly rather than produce a binary that
+ * advertises AAC but can't open the stream (BTA_AV_OPEN_EVT::FAILED).
+ */
+#if MOJO_ENABLE_AAC && !defined(CONFIG_BT_A2DP_CODEC_AAC_ENABLED)
+#error "MOJO_ENABLE_AAC=1 requires CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y (ESP-IDF v6+). Add the sdkconfig.defaults.aac overlay: -DSDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.aac\" and re-run set-target."
 #endif
 
 static void register_stream_endpoints(void)
@@ -234,20 +292,30 @@ static void register_stream_endpoints(void)
     uint8_t seid = 0;
 
 #if MOJO_ENABLE_AAC
-    /* AAC (M24) endpoint - broad capabilities so the iPhone selects AAC-LC */
+    /* AAC (M24) endpoint. Uses the proper A2DP AAC codec-capability constants
+     * (matching the ESP-IDF v6 a2dp_sink_stream_aac example); v6's real AAC
+     * negotiation validates the CIE, so raw 0xff values are rejected and the
+     * stream fails to open. */
     esp_a2d_mcc_t aac = { 0 };
     aac.type = ESP_A2D_MCT_M24;
-    aac.cie.m24_info.obj_type = 0x7f; /* support all AAC object types */
-    aac.cie.m24_info.drc = 0;
-    aac.cie.m24_info.samp_freq1 = 0xff;
-    aac.cie.m24_info.samp_freq2 = 0x0f;
-    aac.cie.m24_info.ch = 0x0f;       /* mono + stereo */
-    aac.cie.m24_info.vbr = 1;
-    aac.cie.m24_info.br1 = 0x7f;
-    aac.cie.m24_info.br2 = 0xff;
-    aac.cie.m24_info.br3 = 0xff;
+    aac.cie.m24_info.drc = ESP_A2D_M24_CIE_DRC_NS;
+    aac.cie.m24_info.obj_type = ESP_A2D_M24_CIE_OBJ_TYPE_2_AAC_LC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_AAC_LC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_HE_AAC |
+                                ESP_A2D_M24_CIE_OBJ_TYPE_4_HE_AAC_V2;
+    aac.cie.m24_info.samp_freq1 = ESP_A2D_M24_CIE_SF1_8K | ESP_A2D_M24_CIE_SF1_11K |
+                                  ESP_A2D_M24_CIE_SF1_12K | ESP_A2D_M24_CIE_SF1_16K |
+                                  ESP_A2D_M24_CIE_SF1_22K | ESP_A2D_M24_CIE_SF1_24K |
+                                  ESP_A2D_M24_CIE_SF1_32K | ESP_A2D_M24_CIE_SF1_44K;
+    aac.cie.m24_info.samp_freq2 = ESP_A2D_M24_CIE_SF2_48K | ESP_A2D_M24_CIE_SF2_64K |
+                                  ESP_A2D_M24_CIE_SF2_88K | ESP_A2D_M24_CIE_SF2_96K;
+    aac.cie.m24_info.ch = ESP_A2D_M24_CIE_CH_1 | ESP_A2D_M24_CIE_CH_2;
+    aac.cie.m24_info.vbr = ESP_A2D_M24_CIE_VBR_SUPPORT;
+    aac.cie.m24_info.br1 = 0x7F & ESP_A2D_M24_CIE_BR1_MSK;
+    aac.cie.m24_info.br2 = 0xFF & ESP_A2D_M24_CIE_BR2_MSK;
+    aac.cie.m24_info.br3 = 0xFF & ESP_A2D_M24_CIE_BR3_MSK;
     esp_a2d_sink_register_stream_endpoint(seid++, &aac);
-    ESP_LOGI(BT_AV_TAG, "registered AAC endpoint (requires ESP-IDF master)");
+    ESP_LOGI(BT_AV_TAG, "registered AAC endpoint");
 #endif
 
     /* SBC endpoint (mandatory, works on all IDF releases) */
@@ -258,7 +326,9 @@ static void register_stream_endpoints(void)
     sbc.cie.sbc_info.block_len = 0xf;
     sbc.cie.sbc_info.num_subbands = 0x3;
     sbc.cie.sbc_info.alloc_mthd = 0x3;
-    sbc.cie.sbc_info.max_bitpool = 53;
+    /* Advertise the full SBC bitpool range (max 250), matching the ESP-IDF
+     * a2dp_sink_stream_aac / avrcp_absolute_volume references. */
+    sbc.cie.sbc_info.max_bitpool = 250;
     sbc.cie.sbc_info.min_bitpool = 2;
     esp_a2d_sink_register_stream_endpoint(seid++, &sbc);
     ESP_LOGI(BT_AV_TAG, "registered SBC endpoint");
@@ -272,6 +342,7 @@ void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_bt_gap_set_device_name(BT_DEVICE_NAME);
         esp_bt_gap_register_callback(bt_app_gap_cb);
 
+#if MOJO_ENABLE_AVRCP
         /* AVRCP first (coupled to A2DP in Bluedroid) */
         esp_avrc_ct_init();
         esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
@@ -280,12 +351,17 @@ void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_avrc_rn_evt_cap_mask_t evt_set = { 0 };
         esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
         esp_avrc_tg_set_rn_evt_cap(&evt_set);
+#endif
 
-        /* A2DP sink (external codec) */
+        /*
+         * A2DP sink (external codec). Stream endpoints and the audio-data
+         * callback are registered later, from the ESP_A2D_PROF_STATE_EVT
+         * (init-success) handler: esp_a2d_sink_init() is asynchronous, and
+         * registering endpoints before init completes silently fails (see the
+         * ESP_A2D_PROF_STATE_EVT case in bt_av_hdl_a2d_evt).
+         */
         esp_a2d_register_callback(bt_app_a2d_cb);
         esp_a2d_sink_init();
-        register_stream_endpoints();
-        esp_a2d_sink_register_audio_data_callback(bt_app_a2d_audio_data_cb);
 
         /* discoverable + connectable */
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);

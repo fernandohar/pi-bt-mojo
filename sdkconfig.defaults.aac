@@ -1,0 +1,11 @@
+# Overlay for the AAC build. Use IN ADDITION to sdkconfig.defaults, and only on
+# ESP-IDF master / v6+ (where A2DP AAC-sink negotiation exists):
+#
+#   idf.py -B build-aac \
+#     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.aac" \
+#     -DMOJO_ENABLE_AAC=1 set-target esp32
+#   idf.py -B build-aac build
+#
+# Enables AAC decoding in the external-codec A2DP sink path.
+CONFIG_BT_A2DP_CODEC_AAC_ENABLED=y
+CONFIG_BT_A2DP_SEP_NUM_MAX=2
